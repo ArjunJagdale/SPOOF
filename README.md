@@ -208,21 +208,6 @@ tqdm>=4.62.0
 ```
 
 ---
-📊 Dataset Statistics
-
-Total Images: 20,819
-
-Training: 14,571 images
-Validation: 3,122 images
-Testing: 3,126 images
-
-
-Classes: Binary classification (Fake/Real)
-
-Fake: 1,546 test samples
-Real: 1,580 test samples
-
----
 
 ## 📝 Citation
 
@@ -231,8 +216,8 @@ If you use this work in your research, please cite:
 ```bibtex
 @misc{spoofnet2024,
   title={SpoofNet: A Deep Learning Approach to Face Anti-Spoofing},
-  author={Your Name},
-  year={2024}
+  author={Arjun Jagdale},
+  year={2025}
 }
 ```
 
