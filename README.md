@@ -18,6 +18,10 @@ This project focuses on detecting **real vs spoof (fake)** face presentations us
 Images were augmented heavily to simulate real-world variations like brightness, texture, motion blur, grayscale conditions, and occlusions.
 
 ---
+## Demo Video
+https://github.com/user-attachments/assets/57018240-5341-4244-99ba-c6310b78f405
+
+---
 
 ### 🧠 Model Architecture
 <img width="1807" height="717" alt="image" src="https://github.com/user-attachments/assets/81685908-ef93-46e8-91ab-45321926c7aa" />
