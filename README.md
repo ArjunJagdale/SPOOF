@@ -169,20 +169,6 @@ accuracy                            0.99      5918
 
 ---
 
-### 🏃‍♂️ How to Run
-
-```bash
-pip install -r requirements.txt
-python train.py
-```
-
-To test a single image:
-
-```python
-python predict.py --image path_to_image.jpg
-```
-
----
 
 ### 🛠 Future Improvements
 
