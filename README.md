@@ -10,11 +10,7 @@ SpoofNet is a convolutional neural network specifically designed to identify sub
 - Unnatural lighting and color reproduction
 - Flat appearance lacking natural depth
 - Moiré patterns and aliasing effects
-
----
-## Demo Video
-https://github.com/user-attachments/assets/57018240-5341-4244-99ba-c6310b78f405
-
+  
 ---
 
 ## 📊 Dataset Statistics
