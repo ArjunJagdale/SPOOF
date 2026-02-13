@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Anti-Spoof Live</title>
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+  <style>
+    body { text-align:center; font-family:Arial; }
+    video { border:1px solid black; width:min(224px, 90vw); height:min(224px, 90vw); }
+    #switchBtn { margin-top:8px; padding:6px 14px; font-size:14px; cursor:pointer; }
+  </style>
+</head>
+<body>
+
+<h2>Live Anti-Spoof</h2>
+<video id="video" width="224" height="224" autoplay playsinline></video>
+<canvas id="canvas" width="224" height="224" style="display:none;"></canvas>
+<br>
+<button id="switchBtn" onclick="switchCamera()">⟳ Switch Camera</button>
+<p id="result">Loading model...</p>
+
+<script>
+let session;
+let running = false;
+let facingMode = "user";
+let currentStream = null;
+
+async function init() {
+  session = await ort.InferenceSession.create("antispoof_model.onnx");
+  document.getElementById("result").innerText = "Model loaded. Starting camera...";
+  startCamera();
+}
+
+async function startCamera() {
+  if (currentStream) {
+    currentStream.getTracks().forEach(t => t.stop());
+  }
+  const video = document.getElementById("video");
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode } });
+  currentStream = stream;
+  video.srcObject = stream;
+  running = true;
+  runLoop();
+}
+
+async function switchCamera() {
+  running = false;
+  facingMode = facingMode === "user" ? "environment" : "user";
+  await startCamera();
+}
+
+async function runLoop() {
+  if (!running) return;
+
+  const video = document.getElementById("video");
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
+
+  ctx.drawImage(video, 0, 0, 224, 224);
+  const imageData = ctx.getImageData(0, 0, 224, 224).data;
+
+  const floatData = new Float32Array(1 * 3 * 224 * 224);
+
+  const mean = [0.485, 0.456, 0.406];
+  const std  = [0.229, 0.224, 0.225];
+
+  for (let i = 0; i < 224 * 224; i++) {
+    const r = imageData[i * 4] / 255;
+    const g = imageData[i * 4 + 1] / 255;
+    const b = imageData[i * 4 + 2] / 255;
+
+    floatData[i] = (r - mean[0]) / std[0];
+    floatData[i + 224*224] = (g - mean[1]) / std[1];
+    floatData[i + 2*224*224] = (b - mean[2]) / std[2];
+  }
+
+  const tensor = new ort.Tensor("float32", floatData, [1,3,224,224]);
+
+  const results = await session.run({ input: tensor });
+
+  const logit = results.output.data[0];
+  const prob = 1 / (1 + Math.exp(-logit));
+
+  document.getElementById("result").innerText =
+    prob > 0.5 ? `REAL (${prob.toFixed(3)})` :
+                 `ATTACK (${prob.toFixed(3)})`;
+
+  requestAnimationFrame(runLoop);
+}
+
+init();
+</script>
+
+</body>
+</html>
