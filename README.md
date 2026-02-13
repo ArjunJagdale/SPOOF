@@ -117,4 +117,4 @@ This allows deployment in lightweight or browser-based environments.
 
 ---
 
-Your move.
+Your move now is to utilize this model, thank!!.
