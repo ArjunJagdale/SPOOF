@@ -5,16 +5,55 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Anti-Spoof Live</title>
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
-  <style>
-    body { text-align:center; font-family:Arial; }
-    video { border:1px solid black; width:min(224px, 90vw); height:min(224px, 90vw); }
-    #switchBtn { margin-top:8px; padding:6px 14px; font-size:14px; cursor:pointer; }
-  </style>
+<style>
+  body { text-align:center; font-family:Arial; }
+
+  .video-wrapper {
+    position: relative;
+    width: min(224px, 90vw);
+    height: min(224px, 90vw);
+    margin: 0 auto;
+  }
+
+  video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  /* Oval mask */
+  .video-wrapper::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+
+    /* Dark overlay with transparent oval cutout */
+    background:
+      radial-gradient(
+        ellipse 45% 60% at center,
+        transparent 0%,
+        transparent 60%,
+        rgba(0,0,0,0.65) 61%
+      );
+  }
+
+  #switchBtn {
+    margin-top:8px;
+    padding:6px 14px;
+    font-size:14px;
+    cursor:pointer;
+  }
+</style>
+
 </head>
 <body>
 
 <h2>Live Anti-Spoof</h2>
-<video id="video" width="224" height="224" autoplay playsinline></video>
+<div class="video-wrapper">
+  <video id="video" width="224" height="224" autoplay playsinline></video>
+</div>
+
 <canvas id="canvas" width="224" height="224" style="display:none;"></canvas>
 <br>
 <button id="switchBtn" onclick="switchCamera()">⟳ Switch Camera</button>
