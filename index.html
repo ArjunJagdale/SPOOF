@@ -6,55 +6,92 @@
   <title>Anti-Spoof Live</title>
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
 <style>
-  body { text-align:center; font-family:Arial; }
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    text-align: center;
+    font-family: Arial;
+    overflow-x: hidden;
+  }
+
+  h2 {
+    font-size: 30px;
+    margin: 16px 0 6px;
+  }
+
+  .instructions {
+    font-size: 15px;
+    color: #444;
+    max-width: 360px;
+    margin: 8px auto 16px;
+    line-height: 1.4;
+    padding: 0 12px;
+  }
 
   .video-wrapper {
     position: relative;
-    width: min(400px, 92vw);
-    height: min(400px, 92vw);
+    /*
+      Use 100vw minus a fixed gutter (12px each side).
+      This guarantees it never touches screen edges on any phone,
+      and caps at 400px on larger screens.
+    */
+    width: min(400px, calc(100vw - 24px));
+    height: min(400px, calc(100vw - 24px));
     margin: 0 auto;
+    overflow: hidden;
   }
 
   video {
     width: 100%;
     height: 100%;
     object-fit: cover;
-    transform: scaleX(-1); /* mirror front camera preview */
+    transform: scaleX(-1);
+    display: block;
   }
 
-  /* Oval mask */
+  /*
+    Oval overlay.
+
+    FIX: gradient stops must be in strictly ascending order.
+    transparent 90% → dark 91% gives a razor-sharp edge.
+
+    ellipse 65% 80%  →  oval is 65% wide, 80% tall of the wrapper,
+    leaving ~17.5% visible margin on left/right (~10% of total width).
+  */
   .video-wrapper::after {
     content: "";
     position: absolute;
     inset: 0;
     pointer-events: none;
-
-    /* Dark overlay with transparent oval cutout */
     background:
       radial-gradient(
-        ellipse 40% 62% at center,
+        ellipse 40% 55% at center,
         transparent 0%,
-        transparent 70%,
-        rgba(0,0,0,0.65) 80%
+        transparent 90%,
+        rgba(0, 0, 0, 0.65) 91%
       );
   }
 </style>
 </head>
 <body>
 
-<h2 style="font-size:30px; margin-bottom:6px;">Live Anti-Spoof</h2>
+<h2>Live Anti-Spoof</h2>
 
-<p style="font-size:15px; color:#444; max-width:360px; margin:8px auto 16px; line-height:1.4;">
+<p class="instructions">
   • Ensure your face is clearly visible in good lighting (avoid harsh reflections).<br>
   • Align and fit your face tightly within the oval.
 </p>
 
 <div class="video-wrapper">
-  <video id="video" width="224" height="224" autoplay playsinline></video>
+  <video id="video" autoplay playsinline></video>
 </div>
 
 <canvas id="canvas" width="224" height="224" style="display:none;"></canvas>
-<p id="result">Loading model...</p>
+<p id="result" style="margin-top:12px;">Loading model...</p>
 
 <script>
 let session;
@@ -81,21 +118,19 @@ async function runLoop() {
   const canvas = document.getElementById("canvas");
   const ctx = canvas.getContext("2d");
 
-  // Un-mirror the canvas draw so the model sees the correct (non-flipped) image
   ctx.save();
   ctx.scale(-1, 1);
   ctx.drawImage(video, -224, 0, 224, 224);
   ctx.restore();
 
   const imageData = ctx.getImageData(0, 0, 224, 224).data;
-
   const floatData = new Float32Array(1 * 3 * 224 * 224);
 
   const mean = [0.485, 0.456, 0.406];
   const std  = [0.229, 0.224, 0.225];
 
   for (let i = 0; i < 224 * 224; i++) {
-    const r = imageData[i * 4] / 255;
+    const r = imageData[i * 4]     / 255;
     const g = imageData[i * 4 + 1] / 255;
     const b = imageData[i * 4 + 2] / 255;
 
