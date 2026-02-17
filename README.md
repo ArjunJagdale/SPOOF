@@ -91,8 +91,7 @@ Each identity folder contains extracted video frames.
 
 ## Results
 
-* **Training Accuracy:** 99.96%
-* **Test Accuracy:** 88.71%
+* **Test Accuracy:** 90.25%
 * **ROC-AUC:** 0.9603
 
 The high AUC indicates strong separability between real and spoof samples.
