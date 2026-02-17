@@ -97,7 +97,7 @@
 let session;
 
 async function init() {
-  session = await ort.InferenceSession.create("antispoof_model.onnx");
+  session = await ort.InferenceSession.create("depthwise.onnx");
   document.getElementById("result").innerText = "Model loaded. Starting camera...";
   startCamera();
 }
