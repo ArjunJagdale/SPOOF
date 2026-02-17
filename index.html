@@ -85,7 +85,7 @@ let isFrontCamera = true;
 let currentStream = null;
 
 async function init() {
-  session = await ort.InferenceSession.create("depthwise.onnx");
+  session = await ort.InferenceSession.create("depthwise_small.onnx");
   document.getElementById("result").innerText = "Model loaded. Starting camera...";
   startCamera(currentFacingMode);
 }
