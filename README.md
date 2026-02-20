@@ -25,6 +25,14 @@ Input size: **224 × 224**
 
 ---
 
+# Results
+* **Train Acc** : 99.03%
+* **Test  Acc** : 92.86%  |
+* **AUC** : 0.9792 | at epoch 13/20
+✓ Best model saved (acc=92.86%)
+
+---
+
 ## 1️⃣ MobileNetV3 Backbone (Semantic Branch)
 
 * Pretrained `mobilenetv3_small_100`
@@ -134,11 +142,6 @@ Each identity folder contains extracted video frames.
 Augmentation ensures robustness against lighting variation, pose shifts, and camera differences.
 
 ---
-
-# Results
-* **Train Acc** : 99.03%
-* **Test  Acc** : 92.86%  |  **AUC** : 0.9792 | at epoch 13/20
-✓ Best model saved (acc=92.86%)
 
 The strong AUC score indicates effective separation between real and spoof samples, while the train–test gap reflects realistic generalization behavior.
 
