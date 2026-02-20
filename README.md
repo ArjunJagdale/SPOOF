@@ -142,10 +142,9 @@ Augmentation ensures robustness against lighting variation, pose shifts, and cam
 ---
 
 # Results
-
-* **Train Accuracy:** 98.86%
-* **Test Accuracy:** 91.94%
-* **AUC:** 0.9539
+* **Train Acc** : 99.03%
+* **Test  Acc** : 92.86%  |  **AUC** : 0.9792 | at epoch 13/20
+✓ Best model saved (acc=92.86%)
 
 The strong AUC score indicates effective separation between real and spoof samples, while the train–test gap reflects realistic generalization behavior.
 
