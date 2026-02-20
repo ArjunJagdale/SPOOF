@@ -85,7 +85,7 @@ let isFrontCamera = true;
 let currentStream = null;
 
 async function init() {
-  session = await ort.InferenceSession.create("antispoof_model.onnx");
+  session = await ort.InferenceSession.create("spoofnet.onnx");
   document.getElementById("result").innerText = "Model loaded. Starting camera...";
   startCamera(currentFacingMode);
 }
