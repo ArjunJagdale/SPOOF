@@ -5,12 +5,6 @@ The model detects whether a face image is **real** or a **spoof attack** (e.g., 
 
 ---
 
-## Demo - [Click here](https://arjunjagdale.github.io/SPOOF/)
-
-**Note:** Keep your face close to your webcam or phone camera (front or rear). The model performs best when the face-to-camera distance is approximately **15–25 cm**.
-
----
-
 ## Overview
 
 This project implements:
