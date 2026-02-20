@@ -151,7 +151,7 @@ The strong AUC score indicates effective separation between real and spoof sampl
 
 The trained PyTorch model is exported to ONNX:
 
-* Opset version: 13
+* Opset version: 18
 * Dynamic batch size support
 * Verified using ONNX Runtime
 
