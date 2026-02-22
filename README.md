@@ -1,4 +1,4 @@
-# SpoofNet – Depthwise Face Anti-Spoofing using PyTorch
+# SpoofNet - Depthwise Face Anti-Spoofing using PyTorch
 
 SpoofNet is a CNN-based face anti-spoofing system built using PyTorch.
 The model detects whether a face image is **real** or a **spoof attack** (e.g., replay/photo attack) using a hybrid deep learning architecture that combines semantic understanding with explicit texture modeling.
