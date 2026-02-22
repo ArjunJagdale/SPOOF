@@ -73,7 +73,7 @@ Raw logit per image. Sigmoid gives P(real). During training this feeds into BCEW
 
 ---
 
-## 1️⃣ MobileNetV3 Backbone (Semantic Branch)
+## MobileNetV3 Backbone (Semantic Branch)
 
 * Pretrained `mobilenetv3_small_100`
 * Extracts hierarchical feature maps
@@ -83,7 +83,7 @@ This branch learns **who/what the face looks like structurally**, but not necess
 
 ---
 
-## 2️⃣ Custom Depthwise Texture CNN Branch (Self-Designed)
+## Custom Depthwise Texture CNN Branch (Self-Designed)
 
 This branch is explicitly designed to capture **micro-texture artifacts**, such as:
 
@@ -127,7 +127,7 @@ This branch operates on **mid-level backbone features**, where spoof artifacts a
 
 ---
 
-## 3️⃣ Feature Fusion
+## Feature Fusion
 
 The final classifier receives:
 
@@ -187,7 +187,7 @@ The strong AUC score indicates effective separation between real and spoof sampl
 
 ---
 
-# 📦 Model Export
+# Model Export
 
 The trained PyTorch model is exported to ONNX:
 
@@ -195,24 +195,3 @@ The trained PyTorch model is exported to ONNX:
 * Dynamic batch size support
 * Verified using ONNX Runtime
 
-This enables:
-
-* Browser-based inference
-* Edge deployment
-* Real-time webcam spoof detection
-
----
-
-# 📌 Key Highlights
-
-* Hybrid architecture (pretrained backbone + depthwise texture branch)
-* Explicit texture modeling for spoof detection
-* Computationally efficient design
-* Deployment-ready via ONNX
-* Reproducible training pipeline
-
----
-
-SpoofNet is designed not merely to classify faces, but to detect deception embedded in texture.
-
-Use it wisely.
