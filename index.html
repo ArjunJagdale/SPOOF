@@ -85,16 +85,33 @@
   let isFrontCamera     = true;
   let currentStream     = null;
 
-  // Flicker-prevention buffer
-  let noFaceFrames = 0;
-  const NO_FACE_BUFFER = 8;
-  let faceVisible = false;
+  // ── Flicker buffer — prevents state flipping on brief frame drops ────────
+  let noFaceFrames  = 0;
+  let badAlignFrames = 0;
+  const NO_FACE_BUFFER   = 8;
+  const BAD_ALIGN_BUFFER = 8;
+  let faceVisible  = false;
+  let faceAligned  = false;
 
-  // Weights are hosted on the GitHub repo via jsDelivr gh/ path — this works reliably
-  const WEIGHTS_URL = "https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights";
+  // ── Prediction smoothing — rolling average over last N logits ────────────
+  const SMOOTH_WINDOW = 7;
+  const predBuffer    = [];
 
+  // ── face-api.js config ───────────────────────────────────────────────────
+  const WEIGHTS_URL      = "https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights";
   const DETECTOR_OPTIONS = new faceapi.TinyFaceDetectorOptions({ scoreThreshold: 0.5 });
 
+  // ── Oval definition (matches CSS radial-gradient: ellipse 35% 55%) ───────
+  // Oval bounding rect as fraction of video display size:
+  //   X: center ± 35%  →  15% to 85%
+  //   Y: center ± 55%  →  -5% to 105% (clamped to 0–100%)
+  // We require the face box to substantially overlap this region.
+  const OVAL = { xMin: 0.15, xMax: 0.85, yMin: 0.0, yMax: 1.0 };
+
+  // Minimum IoU between face bbox and oval rect to consider face "filling" oval
+  const OVAL_IOU_THRESHOLD = 0.30;
+
+  // ── Boot ─────────────────────────────────────────────────────────────────
   async function init() {
     const resultEl = document.getElementById("result");
     resultEl.innerText = "Loading models...";
@@ -108,25 +125,25 @@
     startCamera(currentFacingMode);
   }
 
+  // ── Camera ───────────────────────────────────────────────────────────────
   async function startCamera(facingMode) {
     const video = document.getElementById("video");
 
-    if (currentStream) {
-      currentStream.getTracks().forEach(t => t.stop());
-    }
+    if (currentStream) currentStream.getTracks().forEach(t => t.stop());
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode }
-    });
-
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode } });
     currentStream     = stream;
     video.srcObject   = stream;
     currentFacingMode = facingMode;
     isFrontCamera     = facingMode === "user";
     video.style.transform = isFrontCamera ? "scaleX(-1)" : "scaleX(1)";
 
-    noFaceFrames = 0;
-    faceVisible  = false;
+    // Reset all state on camera switch
+    noFaceFrames   = 0;
+    badAlignFrames = 0;
+    faceVisible    = false;
+    faceAligned    = false;
+    predBuffer.length = 0;
 
     runLoop();
   }
@@ -136,21 +153,51 @@
     startCamera(currentFacingMode === "user" ? "environment" : "user");
   });
 
+  // ── IoU between face bbox and oval rect ──────────────────────────────────
+  // Both rects expressed as fractions of video display dimensions.
+  // face-api.js returns box in px relative to displayed video element size.
+  function computeIoU(faceBox, videoW, videoH) {
+    // Normalise face box to 0–1 fractions
+    // For front camera, face-api sees the visually mirrored video (CSS scaleX(-1))
+    // so box.x is already in mirrored space — no extra flip needed for overlap check.
+    const fx1 = faceBox.x / videoW;
+    const fy1 = faceBox.y / videoH;
+    const fx2 = (faceBox.x + faceBox.width)  / videoW;
+    const fy2 = (faceBox.y + faceBox.height) / videoH;
+
+    const ox1 = OVAL.xMin, oy1 = OVAL.yMin;
+    const ox2 = OVAL.xMax, oy2 = OVAL.yMax;
+
+    const interX1 = Math.max(fx1, ox1);
+    const interY1 = Math.max(fy1, oy1);
+    const interX2 = Math.min(fx2, ox2);
+    const interY2 = Math.min(fy2, oy2);
+
+    const interW = Math.max(0, interX2 - interX1);
+    const interH = Math.max(0, interY2 - interY1);
+    const interArea = interW * interH;
+
+    const faceArea = (fx2 - fx1) * (fy2 - fy1);
+    const ovalArea = (ox2 - ox1) * (oy2 - oy1);
+    const unionArea = faceArea + ovalArea - interArea;
+
+    return unionArea > 0 ? interArea / unionArea : 0;
+  }
+
+  // ── Main loop ────────────────────────────────────────────────────────────
   async function runLoop() {
     const video    = document.getElementById("video");
     const canvas   = document.getElementById("canvas");
     const ctx      = canvas.getContext("2d");
     const resultEl = document.getElementById("result");
 
-    // ── Step 1: Face Detection Gate ───────────────────────────────────────
-    let faceDetected = false;
-
+    // ── Layer 1: Is there a face at all? ─────────────────────────────────
+    let detection = null;
     if (video.readyState >= 2) {
-      const detection = await faceapi.detectSingleFace(video, DETECTOR_OPTIONS);
-      faceDetected = !!detection;
+      detection = await faceapi.detectSingleFace(video, DETECTOR_OPTIONS);
     }
 
-    if (faceDetected) {
+    if (detection) {
       noFaceFrames = 0;
       faceVisible  = true;
     } else {
@@ -158,14 +205,38 @@
       if (noFaceFrames >= NO_FACE_BUFFER) faceVisible = false;
     }
 
-    // ── Step 2: No face → skip classifier ────────────────────────────────
     if (!faceVisible) {
       resultEl.innerText = "No Face Detected";
+      predBuffer.length  = 0;
       requestAnimationFrame(runLoop);
       return;
     }
 
-    // ── Step 3: Liveness classification (original logic — untouched) ──────
+    // ── Layer 2: Does the face fill the oval? ─────────────────────────────
+    let fillingOval = false;
+    if (detection) {
+      const videoW = video.videoWidth  || video.clientWidth;
+      const videoH = video.videoHeight || video.clientHeight;
+      const iou    = computeIoU(detection.box, videoW, videoH);
+      fillingOval  = iou >= OVAL_IOU_THRESHOLD;
+    }
+
+    if (fillingOval) {
+      badAlignFrames = 0;
+      faceAligned    = true;
+    } else {
+      badAlignFrames++;
+      if (badAlignFrames >= BAD_ALIGN_BUFFER) faceAligned = false;
+    }
+
+    if (!faceAligned) {
+      resultEl.innerText = "Align face with oval";
+      predBuffer.length  = 0;
+      requestAnimationFrame(runLoop);
+      return;
+    }
+
+    // ── Layer 3: Liveness — full frame, untouched preprocessing ──────────
     ctx.save();
     if (isFrontCamera) {
       ctx.scale(-1, 1);
@@ -177,7 +248,6 @@
 
     const imageData = ctx.getImageData(0, 0, 224, 224).data;
     const floatData = new Float32Array(1 * 3 * 224 * 224);
-
     const mean = [0.485, 0.456, 0.406];
     const std  = [0.229, 0.224, 0.225];
 
@@ -193,7 +263,13 @@
     const tensor  = new ort.Tensor("float32", floatData, [1, 3, 224, 224]);
     const results = await session.run({ input: tensor });
     const logit   = results.output.data[0];
-    const prob    = 1 / (1 + Math.exp(-logit));
+
+    // ── Smooth: rolling average of raw logits ─────────────────────────────
+    predBuffer.push(logit);
+    if (predBuffer.length > SMOOTH_WINDOW) predBuffer.shift();
+
+    const avgLogit = predBuffer.reduce((a, b) => a + b, 0) / predBuffer.length;
+    const prob     = 1 / (1 + Math.exp(-avgLogit));
 
     resultEl.innerText =
       prob > 0.5 ? `REAL (${prob.toFixed(3)})`
