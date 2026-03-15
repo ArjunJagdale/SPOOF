@@ -3,295 +3,171 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Face Liveness Check</title>
+  <title>Anti-Spoof Live</title>
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+<style>
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
 
-    body {
-      text-align: center;
-      font-family: Arial, sans-serif;
-      background: #f5f5f5;
-      padding-bottom: 32px;
-    }
+  body {
+    text-align: center;
+    font-family: Arial;
+    overflow-x: hidden;
+  }
 
-    .header { padding: 20px 16px 12px; }
+  h2 {
+    font-size: 30px;
+    margin: 16px 0 6px;
+  }
 
-    .header h1 {
-      font-size: 22px;
-      font-weight: 800;
-      color: #111;
-      letter-spacing: 0.3px;
-    }
+  .instructions {
+    font-size: 15px;
+    color: #444;
+    max-width: 360px;
+    margin: 8px auto 16px;
+    line-height: 1.4;
+    padding: 0 12px;
+  }
 
-    .header p {
-      font-size: 13px;
-      font-weight: 600;
-      color: #666;
-      margin-top: 4px;
-    }
+  .video-wrapper {
+    position: relative;
+    width: min(400px, calc(100vw - 24px));
+    height: min(400px, calc(100vw - 24px));
+    margin: 0 auto;
+    overflow: hidden;
+  }
 
-    .video-wrapper {
-      position: relative;
-      width: min(280px, calc(100vw - 32px));
-      height: min(355px, calc((100vw - 32px) * 1.27));
-      margin: 0 auto;
-      overflow: hidden;
-      border-radius: 50%;
-      border: 3px solid #ccc;
-      background: #000;
-    }
+  video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
 
-    video {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      display: block;
-      transform: scaleX(-1); /* front camera only — always mirrored */
-    }
-
-    .video-wrapper::after {
-      content: "";
-      position: absolute;
-      inset: 0;
-      pointer-events: none;
-      background: radial-gradient(
-        ellipse 42% 48% at center,
+  .video-wrapper::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(
+        ellipse 35% 55% at center,
         transparent 0%,
-        transparent 85%,
-        rgba(0,0,0,0.72) 86%
+        transparent 90%,
+        rgba(0, 0, 0, 0.80) 91%
       );
-    }
-
-    .progress-wrap {
-      width: min(280px, calc(100vw - 32px));
-      margin: 12px auto 0;
-      height: 6px;
-      background: #ddd;
-      border-radius: 4px;
-      overflow: hidden;
-    }
-
-    .progress-fill {
-      height: 100%;
-      width: 0%;
-      background: #39ff14;
-      box-shadow: 0 0 8px #39ff14;
-      border-radius: 4px;
-      transition: width 0.1s linear;
-    }
-
-    #status {
-      margin: 14px auto 0;
-      font-size: 15px;
-      font-weight: 700;
-      color: #222;
-      max-width: 280px;
-      min-height: 46px;
-      line-height: 1.5;
-      white-space: pre-line;
-    }
-
-    #resultBox {
-      display: none;
-      margin: 16px auto 0;
-      width: min(280px, calc(100vw - 32px));
-      padding: 16px;
-      border-radius: 8px;
-      font-size: 18px;
-      font-weight: 800;
-      letter-spacing: 0.3px;
-    }
-
-    #resultBox.real   { background: #dcfce7; color: #15803d; border: 2px solid #86efac; }
-    #resultBox.attack { background: #fee2e2; color: #b91c1c; border: 2px solid #fca5a5; }
-
-    #retryBtn {
-      display: none;
-      margin: 14px auto 0;
-      padding: 10px 32px;
-      font-size: 15px;
-      font-weight: 700;
-      border: none;
-      border-radius: 6px;
-      background: #2563eb;
-      color: #fff;
-      cursor: pointer;
-      letter-spacing: 0.3px;
-    }
-
-    #retryBtn:hover { background: #1d4ed8; }
-  </style>
+  }
+</style>
 </head>
 <body>
 
-  <div class="header">
-    <h1>Face Liveness Check</h1>
-    <p>Ensure good lighting and look directly at the camera</p>
-  </div>
+<h2>Live Anti-Spoof</h2>
 
-  <div class="video-wrapper">
-    <video id="video" autoplay playsinline></video>
-  </div>
+<p class="instructions">
+  • Ensure your face is clearly visible in good lighting (avoid harsh reflections).<br>
+  • Align and fit your face tightly within the oval.
+</p>
 
-  <div class="progress-wrap">
-    <div class="progress-fill" id="progressFill"></div>
-  </div>
+<div class="video-wrapper">
+  <video id="video" autoplay playsinline></video>
+</div>
 
-  <p id="status">Loading models...</p>
-  <div id="resultBox"></div>
-  <button id="retryBtn" onclick="retry()">Try Again</button>
-  <canvas id="canvas" width="224" height="224" style="display:none;"></canvas>
+<canvas id="canvas" width="224" height="224" style="display:none;"></canvas>
+<p id="result" style="margin-top:12px;">Loading model...</p>
 
 <script>
-  const WEIGHTS_URL      = "weights";
-  const DETECTOR_OPTIONS = new faceapi.TinyFaceDetectorOptions({ scoreThreshold: 0.5 });
-  const HOLD_DURATION_MS = 1500;
-  const CAPTURE_FRAMES   = 15;
-  const OVAL_IOU_THRESH  = 0.60;
-  const MEAN             = [0.485, 0.456, 0.406];
-  const STD              = [0.229, 0.224, 0.225];
-  const OVAL             = { x1: 0.25, y1: 0.0, x2: 0.75, y2: 1.0 };
+let session;
+let currentFacingMode = "user"; // default front
+let isFrontCamera = true;
+let currentStream = null;
 
-  let session, currentStream;
-  let alignStart = null;
-  let phase      = "aligning";
+async function init() {
+  session = await ort.InferenceSession.create("spoofnet.onnx");
+  document.getElementById("result").innerText = "Model loaded. Starting camera...";
+  startCamera(currentFacingMode);
+}
 
-  function setProgress(f) {
-    document.getElementById("progressFill").style.width = `${f * 100}%`;
+async function startCamera(facingMode) {
+  const video = document.getElementById("video");
+
+  if (currentStream) {
+    currentStream.getTracks().forEach(track => track.stop());
   }
 
-  function setStatus(msg) {
-    document.getElementById("status").innerText = msg;
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: facingMode }
+  });
+
+  currentStream = stream;
+  video.srcObject = stream;
+
+  currentFacingMode = facingMode;
+  isFrontCamera = facingMode === "user";
+
+  // Flip only front camera visually
+  video.style.transform = isFrontCamera ? "scaleX(-1)" : "scaleX(1)";
+
+  runLoop();
+}
+
+// Optional: double tap to switch camera (no UI change)
+document.addEventListener("dblclick", () => {
+  const newMode = currentFacingMode === "user" ? "environment" : "user";
+  startCamera(newMode);
+});
+
+async function runLoop() {
+  const video = document.getElementById("video");
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
+
+  ctx.save();
+
+  if (isFrontCamera) {
+    // Flip canvas only for front camera
+    ctx.scale(-1, 1);
+    ctx.drawImage(video, -224, 0, 224, 224);
+  } else {
+    // Rear camera not flipped
+    ctx.drawImage(video, 0, 0, 224, 224);
   }
 
-  async function init() {
-    setStatus("Loading models...");
-    await Promise.all([
-      ort.InferenceSession.create("spoofnet.onnx").then(s => { session = s; }),
-      faceapi.nets.tinyFaceDetector.loadFromUri(WEIGHTS_URL)
-    ]);
-    await startCamera();
+  ctx.restore();
+
+  const imageData = ctx.getImageData(0, 0, 224, 224).data;
+  const floatData = new Float32Array(1 * 3 * 224 * 224);
+
+  const mean = [0.485, 0.456, 0.406];
+  const std  = [0.229, 0.224, 0.225];
+
+  for (let i = 0; i < 224 * 224; i++) {
+    const r = imageData[i * 4]     / 255;
+    const g = imageData[i * 4 + 1] / 255;
+    const b = imageData[i * 4 + 2] / 255;
+
+    floatData[i]             = (r - mean[0]) / std[0];
+    floatData[i + 224*224]   = (g - mean[1]) / std[1];
+    floatData[i + 2*224*224] = (b - mean[2]) / std[2];
   }
 
-  async function startCamera() {
-    if (currentStream) currentStream.getTracks().forEach(t => t.stop());
-    const stream    = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
-    const video     = document.getElementById("video");
-    currentStream   = stream;
-    video.srcObject = stream;
-    phase      = "aligning";
-    alignStart = null;
-    setProgress(0);
-    setStatus("Position your face inside the oval");
-    requestAnimationFrame(alignLoop);
-  }
+  const tensor = new ort.Tensor("float32", floatData, [1, 3, 224, 224]);
+  const results = await session.run({ input: tensor });
 
-  function computeIoU(box, vw, vh) {
-    const fx1 = box.x / vw,               fy1 = box.y / vh;
-    const fx2 = (box.x + box.width) / vw, fy2 = (box.y + box.height) / vh;
-    const ix1 = Math.max(fx1, OVAL.x1),   iy1 = Math.max(fy1, OVAL.y1);
-    const ix2 = Math.min(fx2, OVAL.x2),   iy2 = Math.min(fy2, OVAL.y2);
-    const inter = Math.max(0, ix2 - ix1) * Math.max(0, iy2 - iy1);
-    const union = (fx2-fx1)*(fy2-fy1) + (OVAL.x2-OVAL.x1)*(OVAL.y2-OVAL.y1) - inter;
-    return union > 0 ? inter / union : 0;
-  }
+  const logit = results.output.data[0];
+  const prob = 1 / (1 + Math.exp(-logit));
 
-  async function alignLoop() {
-    if (phase !== "aligning") return;
+  document.getElementById("result").innerText =
+    prob > 0.5 ? `REAL (${prob.toFixed(3)})`
+               : `ATTACK (${prob.toFixed(3)})`;
 
-    const video = document.getElementById("video");
-    let aligned = false, iou = 0;
+  requestAnimationFrame(runLoop);
+}
 
-    if (video.readyState >= 2) {
-      const det = await faceapi.detectSingleFace(video, DETECTOR_OPTIONS);
-      if (det) {
-        const vw = video.videoWidth  || video.clientWidth;
-        const vh = video.videoHeight || video.clientHeight;
-        iou     = computeIoU(det.box, vw, vh);
-        aligned = iou >= OVAL_IOU_THRESH;
-      }
-    }
-
-    const now = performance.now();
-
-    if (aligned) {
-      if (!alignStart) alignStart = now;
-      const elapsed = now - alignStart;
-      setProgress(Math.min(elapsed / HOLD_DURATION_MS, 1.0));
-      setStatus("Hold still...");
-      if (elapsed >= HOLD_DURATION_MS) {
-        phase = "capturing";
-        setProgress(1);
-        setStatus("Analysing...");
-        await capture();
-        return;
-      }
-    } else {
-      alignStart = null;
-      setProgress(0);
-      setStatus("Centre your face in the oval and come closer");
-    }
-
-    requestAnimationFrame(alignLoop);
-  }
-
-  async function capture() {
-    const video  = document.getElementById("video");
-    const canvas = document.getElementById("canvas");
-    const ctx    = canvas.getContext("2d");
-    const logits = [];
-
-    for (let i = 0; i < CAPTURE_FRAMES; i++) {
-      ctx.save();
-      ctx.scale(-1, 1);
-      ctx.drawImage(video, -224, 0, 224, 224);
-      ctx.restore();
-
-      const imageData = ctx.getImageData(0, 0, 224, 224).data;
-      const floatData = new Float32Array(3 * 224 * 224);
-      for (let p = 0; p < 224 * 224; p++) {
-        const r = imageData[p * 4]     / 255;
-        const g = imageData[p * 4 + 1] / 255;
-        const b = imageData[p * 4 + 2] / 255;
-        floatData[p]               = (r - MEAN[0]) / STD[0];
-        floatData[p + 224 * 224]   = (g - MEAN[1]) / STD[1];
-        floatData[p + 2 * 224*224] = (b - MEAN[2]) / STD[2];
-      }
-
-      const tensor = new ort.Tensor("float32", floatData, [1, 3, 224, 224]);
-      const result = await session.run({ input: tensor });
-      logits.push(result.output.data[0]);
-      await new Promise(r => setTimeout(r, 60));
-    }
-
-    const avgLogit = logits.reduce((a, b) => a + b, 0) / logits.length;
-    showResult(1 / (1 + Math.exp(-avgLogit)));
-  }
-
-  function showResult(prob) {
-    phase = "done";
-    setStatus("");
-    setProgress(0);
-    const box     = document.getElementById("resultBox");
-    box.className = prob >= 0.85 ? "real" : "attack";
-    box.innerText = prob >= 0.85 ? "REAL FACE" : "SPOOF DETECTED";
-    box.style.display = "block";
-    document.getElementById("retryBtn").style.display = "block";
-  }
-
-  function retry() {
-    document.getElementById("resultBox").style.display = "none";
-    document.getElementById("retryBtn").style.display  = "none";
-    phase      = "aligning";
-    alignStart = null;
-    setProgress(0);
-    setStatus("Position your face inside the oval");
-    requestAnimationFrame(alignLoop);
-  }
-
-  init();
+init();
 </script>
+
 </body>
 </html>
