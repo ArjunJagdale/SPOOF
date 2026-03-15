@@ -5,62 +5,63 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Anti-Spoof Live</title>
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
-<style>
-  * {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
-  }
+  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
 
-  body {
-    text-align: center;
-    font-family: Arial;
-    overflow-x: hidden;
-  }
+    body {
+      text-align: center;
+      font-family: Arial;
+      overflow-x: hidden;
+    }
 
-  h2 {
-    font-size: 30px;
-    margin: 16px 0 6px;
-  }
+    h2 {
+      font-size: 30px;
+      margin: 16px 0 6px;
+    }
 
-  .instructions {
-    font-size: 15px;
-    color: #444;
-    max-width: 360px;
-    margin: 8px auto 16px;
-    line-height: 1.4;
-    padding: 0 12px;
-  }
+    .instructions {
+      font-size: 15px;
+      color: #444;
+      max-width: 360px;
+      margin: 8px auto 16px;
+      line-height: 1.4;
+      padding: 0 12px;
+    }
 
-  .video-wrapper {
-    position: relative;
-    width: min(400px, calc(100vw - 24px));
-    height: min(400px, calc(100vw - 24px));
-    margin: 0 auto;
-    overflow: hidden;
-  }
+    .video-wrapper {
+      position: relative;
+      width: min(400px, calc(100vw - 24px));
+      height: min(400px, calc(100vw - 24px));
+      margin: 0 auto;
+      overflow: hidden;
+    }
 
-  video {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    display: block;
-  }
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
 
-  .video-wrapper::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    background:
-      radial-gradient(
-        ellipse 35% 55% at center,
-        transparent 0%,
-        transparent 90%,
-        rgba(0, 0, 0, 0.80) 91%
-      );
-  }
-</style>
+    .video-wrapper::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(
+          ellipse 35% 55% at center,
+          transparent 0%,
+          transparent 90%,
+          rgba(0, 0, 0, 0.80) 91%
+        );
+    }
+  </style>
 </head>
 <body>
 
@@ -76,97 +77,138 @@
 </div>
 
 <canvas id="canvas" width="224" height="224" style="display:none;"></canvas>
-<p id="result" style="margin-top:12px;">Loading model...</p>
+<p id="result" style="margin-top:12px;">Loading models...</p>
 
 <script>
-let session;
-let currentFacingMode = "user"; // default front
-let isFrontCamera = true;
-let currentStream = null;
+  let session;
+  let currentFacingMode = "user";
+  let isFrontCamera     = true;
+  let currentStream     = null;
 
-async function init() {
-  session = await ort.InferenceSession.create("spoofnet.onnx");
-  document.getElementById("result").innerText = "Model loaded. Starting camera...";
-  startCamera(currentFacingMode);
-}
+  // Flicker-prevention buffer
+  let noFaceFrames = 0;
+  const NO_FACE_BUFFER = 8;
+  let faceVisible = false;
 
-async function startCamera(facingMode) {
-  const video = document.getElementById("video");
+  // face-api.js TinyFaceDetector options
+  // scoreThreshold: 0.5 is a safe gate — not too sensitive, not too strict
+  const DETECTOR_OPTIONS = new faceapi.TinyFaceDetectorOptions({ scoreThreshold: 0.5 });
 
-  if (currentStream) {
-    currentStream.getTracks().forEach(track => track.stop());
+  // CDN path where face-api.js weights are hosted (jsDelivr, works on GitHub Pages)
+  const WEIGHTS_URL = "https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/weights";
+
+  async function init() {
+    const resultEl = document.getElementById("result");
+    resultEl.innerText = "Loading models...";
+
+    // Load ONNX liveness model + face-api.js TinyFaceDetector weights in parallel
+    await Promise.all([
+      ort.InferenceSession.create("spoofnet.onnx").then(s => { session = s; }),
+      faceapi.nets.tinyFaceDetector.loadFromUri(WEIGHTS_URL)
+    ]);
+
+    resultEl.innerText = "Models loaded. Starting camera...";
+    startCamera(currentFacingMode);
   }
 
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: facingMode }
+  async function startCamera(facingMode) {
+    const video = document.getElementById("video");
+
+    if (currentStream) {
+      currentStream.getTracks().forEach(t => t.stop());
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode }
+    });
+
+    currentStream     = stream;
+    video.srcObject   = stream;
+    currentFacingMode = facingMode;
+    isFrontCamera     = facingMode === "user";
+    video.style.transform = isFrontCamera ? "scaleX(-1)" : "scaleX(1)";
+
+    // Reset buffer on camera switch
+    noFaceFrames = 0;
+    faceVisible  = false;
+
+    runLoop();
+  }
+
+  // Double-tap to flip camera
+  document.addEventListener("dblclick", () => {
+    startCamera(currentFacingMode === "user" ? "environment" : "user");
   });
 
-  currentStream = stream;
-  video.srcObject = stream;
+  async function runLoop() {
+    const video    = document.getElementById("video");
+    const canvas   = document.getElementById("canvas");
+    const ctx      = canvas.getContext("2d");
+    const resultEl = document.getElementById("result");
 
-  currentFacingMode = facingMode;
-  isFrontCamera = facingMode === "user";
+    // ── Step 1: Face Detection Gate ───────────────────────────────────────
+    // face-api.js detects directly on the <video> element — no extra canvas needed
+    let faceDetected = false;
 
-  // Flip only front camera visually
-  video.style.transform = isFrontCamera ? "scaleX(-1)" : "scaleX(1)";
+    if (video.readyState >= 2) {
+      const detection = await faceapi.detectSingleFace(video, DETECTOR_OPTIONS);
+      faceDetected = !!detection;
+    }
 
-  runLoop();
-}
+    // Buffer: prevent flickering when face briefly leaves frame
+    if (faceDetected) {
+      noFaceFrames = 0;
+      faceVisible  = true;
+    } else {
+      noFaceFrames++;
+      if (noFaceFrames >= NO_FACE_BUFFER) faceVisible = false;
+    }
 
-// Optional: double tap to switch camera (no UI change)
-document.addEventListener("dblclick", () => {
-  const newMode = currentFacingMode === "user" ? "environment" : "user";
-  startCamera(newMode);
-});
+    // ── Step 2: No face → skip classifier ────────────────────────────────
+    if (!faceVisible) {
+      resultEl.innerText = "No Face Detected";
+      requestAnimationFrame(runLoop);
+      return;
+    }
 
-async function runLoop() {
-  const video = document.getElementById("video");
-  const canvas = document.getElementById("canvas");
-  const ctx = canvas.getContext("2d");
+    // ── Step 3: Liveness classification (original logic — untouched) ──────
+    ctx.save();
+    if (isFrontCamera) {
+      ctx.scale(-1, 1);
+      ctx.drawImage(video, -224, 0, 224, 224);
+    } else {
+      ctx.drawImage(video, 0, 0, 224, 224);
+    }
+    ctx.restore();
 
-  ctx.save();
+    const imageData = ctx.getImageData(0, 0, 224, 224).data;
+    const floatData = new Float32Array(1 * 3 * 224 * 224);
 
-  if (isFrontCamera) {
-    // Flip canvas only for front camera
-    ctx.scale(-1, 1);
-    ctx.drawImage(video, -224, 0, 224, 224);
-  } else {
-    // Rear camera not flipped
-    ctx.drawImage(video, 0, 0, 224, 224);
+    const mean = [0.485, 0.456, 0.406];
+    const std  = [0.229, 0.224, 0.225];
+
+    for (let i = 0; i < 224 * 224; i++) {
+      const r = imageData[i * 4]     / 255;
+      const g = imageData[i * 4 + 1] / 255;
+      const b = imageData[i * 4 + 2] / 255;
+      floatData[i]               = (r - mean[0]) / std[0];
+      floatData[i + 224 * 224]   = (g - mean[1]) / std[1];
+      floatData[i + 2 * 224*224] = (b - mean[2]) / std[2];
+    }
+
+    const tensor  = new ort.Tensor("float32", floatData, [1, 3, 224, 224]);
+    const results = await session.run({ input: tensor });
+    const logit   = results.output.data[0];
+    const prob    = 1 / (1 + Math.exp(-logit));
+
+    resultEl.innerText =
+      prob > 0.5 ? `REAL (${prob.toFixed(3)})`
+                 : `ATTACK (${prob.toFixed(3)})`;
+
+    requestAnimationFrame(runLoop);
   }
 
-  ctx.restore();
-
-  const imageData = ctx.getImageData(0, 0, 224, 224).data;
-  const floatData = new Float32Array(1 * 3 * 224 * 224);
-
-  const mean = [0.485, 0.456, 0.406];
-  const std  = [0.229, 0.224, 0.225];
-
-  for (let i = 0; i < 224 * 224; i++) {
-    const r = imageData[i * 4]     / 255;
-    const g = imageData[i * 4 + 1] / 255;
-    const b = imageData[i * 4 + 2] / 255;
-
-    floatData[i]             = (r - mean[0]) / std[0];
-    floatData[i + 224*224]   = (g - mean[1]) / std[1];
-    floatData[i + 2*224*224] = (b - mean[2]) / std[2];
-  }
-
-  const tensor = new ort.Tensor("float32", floatData, [1, 3, 224, 224]);
-  const results = await session.run({ input: tensor });
-
-  const logit = results.output.data[0];
-  const prob = 1 / (1 + Math.exp(-logit));
-
-  document.getElementById("result").innerText =
-    prob > 0.5 ? `REAL (${prob.toFixed(3)})`
-               : `ATTACK (${prob.toFixed(3)})`;
-
-  requestAnimationFrame(runLoop);
-}
-
-init();
+  init();
 </script>
 
 </body>
