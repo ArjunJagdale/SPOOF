@@ -4,20 +4,15 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Anti-Spoof Live</title>
-
-  <!-- ONNX Runtime for spoof model -->
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
-
-  <!-- vladmandic/face-api — actively maintained fork, WebGL backend, NO WASM conflict -->
   <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
-
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { text-align: center; font-family: Arial; overflow-x: hidden; }
-  h2 { font-size: 30px; margin: 16px 0 6px; }
+  body { text-align: center; font-family: Arial; overflow-x: hidden; background: #f5f5f5; }
+  h2 { font-size: 28px; margin: 16px 0 6px; }
   .instructions {
-    font-size: 15px; color: #444; max-width: 360px;
-    margin: 8px auto 16px; line-height: 1.4; padding: 0 12px;
+    font-size: 14px; color: #555; max-width: 360px;
+    margin: 6px auto 14px; line-height: 1.5; padding: 0 12px;
   }
   .video-wrapper {
     position: relative;
@@ -36,121 +31,229 @@
     );
   }
 
-  /* Distance badge */
-  #distanceBadge {
-    display: inline-block; margin-top: 10px; padding: 6px 18px;
-    border-radius: 999px; font-size: 15px; font-weight: 600;
-    letter-spacing: 0.4px; transition: background 0.3s, color 0.3s;
-    background: #e8e8e8; color: #333;
+  /* status strip below video */
+  #statusBar {
+    margin: 10px auto 0;
+    max-width: min(400px, calc(100vw - 24px));
+    padding: 8px 14px;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 600;
+    background: #e0e0e0;
+    color: #333;
+    transition: background 0.3s, color 0.3s;
   }
-  #distanceBadge.close { background: #ffe0e0; color: #c0392b; }
-  #distanceBadge.good  { background: #d4f7dc; color: #1a7a37; }
-  #distanceBadge.far   { background: #fff3cd; color: #856404; }
+  #statusBar.far   { background: #fff3cd; color: #856404; }
+  #statusBar.close { background: #ffe0e0; color: #c0392b; }
+  #statusBar.ready { background: #d4f7dc; color: #1a7a37; }
+  #statusBar.capturing { background: #cce5ff; color: #004085; }
+
+  /* capture button */
+  #captureBtn {
+    display: none;
+    margin: 12px auto 0;
+    padding: 12px 36px;
+    font-size: 17px;
+    font-weight: 700;
+    border: none;
+    border-radius: 999px;
+    background: #1a7a37;
+    color: #fff;
+    cursor: pointer;
+    letter-spacing: 0.5px;
+    transition: background 0.2s, transform 0.1s;
+  }
+  #captureBtn:active { transform: scale(0.97); }
+  #captureBtn:disabled { background: #888; cursor: not-allowed; }
+
+  /* final result box */
+  #finalResult {
+    display: none;
+    margin: 14px auto 0;
+    max-width: min(400px, calc(100vw - 24px));
+    padding: 14px 20px;
+    border-radius: 10px;
+    font-size: 20px;
+    font-weight: 700;
+  }
+  #finalResult.real  { background: #d4f7dc; color: #1a7a37; }
+  #finalResult.spoof { background: #ffe0e0; color: #c0392b; }
 </style>
 </head>
 <body>
-<h2>Live Anti-Spoof</h2>
+<h2>Face Liveness Check</h2>
 <p class="instructions">
-  • Ensure your face is clearly visible in good lighting (avoid harsh reflections).<br>
-  • Align and fit your face tightly within the oval.
+  Position your face inside the oval until the indicator turns green, then tap <b>Capture</b>.
 </p>
 <div class="video-wrapper">
   <video id="video" autoplay playsinline></video>
 </div>
+
+<div id="statusBar">Loading models…</div>
+<button id="captureBtn">Capture</button>
+<div id="finalResult"></div>
+
 <canvas id="canvas" width="224" height="224" style="display:none;"></canvas>
-<p id="result" style="margin-top:12px;">Loading models...</p>
-<div id="distanceBadge">📏 Distance: —</div>
 
 <script>
-// ─────────────────────────────────────────────────────────────────────────────
-//  DISTANCE CONFIG
-//  Pinhole formula: distance_cm = (KNOWN_WIDTH_CM × FOCAL_PX) / face_box_width_px
-//
-//  FOCAL_PX is calibrated for a 224×224 canvas:
-//    Typical face at 60 cm fills ~134 px → focal = 134 × 60 / 14 ≈ 574
-//  ⚙️  Sit 60 cm away, check reading, nudge FOCAL_PX until it shows ~60.
-// ─────────────────────────────────────────────────────────────────────────────
-const KNOWN_FACE_WIDTH_CM = 14;   // average adult face width
-const FOCAL_PX            = 574;  // calibrated for 224px canvas at ~60 cm
-const GOOD_MIN_CM         = 25;   // green zone min — adjust to your oval
-const GOOD_MAX_CM         = 38;   // green zone max — adjust to your oval
+// ─── DISTANCE CONFIG ───────────────────────────────────────────────────────
+// Good range covers both phone (~40-45) and laptop (~50-55) from your tests
+const GOOD_MIN_CM = 40;
+const GOOD_MAX_CM = 55;
 
-// MODEL URL — weights served directly from CDN, nothing to commit to your repo
+const KNOWN_FACE_WIDTH_CM = 14;
+const FOCAL_PX            = 574;  // calibrated for 224px canvas — tweak if needed
+
 const MODEL_URL = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model";
+const DETECTOR_OPTS = new faceapi.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.4 });
 
-let faceApiReady = false;
-let latestFaceBoxWidth = null;   // px on 224×224 canvas
+// ─── STATE ─────────────────────────────────────────────────────────────────
+let session;
+let currentFacingMode = "user";
+let isFrontCamera     = true;
+let currentStream     = null;
+let faceApiReady      = false;
+let latestDistCm      = null;
+let isCapturing       = false;
 
-// Load only the tiny face detector (smallest, fastest, no landmark weights needed)
+// ─── FACE API LOAD ─────────────────────────────────────────────────────────
 async function loadFaceApi() {
   await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
   faceApiReady = true;
-  console.log("✅ TinyFaceDetector loaded");
 }
 
-// Detection options — inputSize 160 is fastest for webcam distance estimation
-const DETECTOR_OPTS = new faceapi.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.4 });
-
-// Throttle: run detection at ~8 fps (plenty for distance), keep loop light
+// Throttled detection — ~8 fps is plenty
 let lastDetectTime = 0;
 async function runFaceDetection(canvas) {
   if (!faceApiReady) return;
   const now = performance.now();
   if (now - lastDetectTime < 120) return;
   lastDetectTime = now;
-
-  // detectSingleFace runs on the canvas element directly (no extra copy needed)
   const det = await faceapi.detectSingleFace(canvas, DETECTOR_OPTS);
-  latestFaceBoxWidth = det ? det.box.width : null;
+  if (det && det.box.width > 0) {
+    latestDistCm = (KNOWN_FACE_WIDTH_CM * FOCAL_PX) / det.box.width;
+  } else {
+    latestDistCm = null;
+  }
 }
 
-function updateDistanceBadge() {
-  const badge = document.getElementById("distanceBadge");
-  if (!latestFaceBoxWidth) {
-    badge.className = "";
-    badge.textContent = "📏 Distance: — (no face detected)";
+// ─── STATUS BAR + CAPTURE BUTTON visibility ────────────────────────────────
+function updateUI() {
+  if (isCapturing) return;   // don't overwrite during capture
+
+  const bar = document.getElementById("statusBar");
+  const btn = document.getElementById("captureBtn");
+
+  if (latestDistCm === null) {
+    bar.className = "";
+    bar.textContent = "📷 No face detected — look at the camera";
+    btn.style.display = "none";
     return;
   }
-  const d = Math.round((KNOWN_FACE_WIDTH_CM * FOCAL_PX) / latestFaceBoxWidth);
-  if (d < GOOD_MIN_CM) {
-    badge.className = "close";
-    badge.textContent = `📏 ${d} cm — Too close, move back`;
-  } else if (d > GOOD_MAX_CM) {
-    badge.className = "far";
-    badge.textContent = `📏 ${d} cm — Too far, move closer`;
+
+  const d = Math.round(latestDistCm);
+
+  if (latestDistCm < GOOD_MIN_CM) {
+    bar.className = "close";
+    bar.textContent = `📏 ${d} cm — Too close, move back`;
+    btn.style.display = "none";
+  } else if (latestDistCm > GOOD_MAX_CM) {
+    bar.className = "far";
+    bar.textContent = `📏 ${d} cm — Too far, move closer`;
+    btn.style.display = "none";
   } else {
-    badge.className = "good";
-    badge.textContent = `📏 ${d} cm — ✓ Perfect distance`;
+    bar.className = "ready";
+    bar.textContent = `📏 ${d} cm — ✓ Hold still and capture!`;
+    btn.style.display = "inline-block";
+    btn.disabled = false;
   }
 }
+
+// ─── CAPTURE LOGIC ─────────────────────────────────────────────────────────
+// Sample 10 frames spread over 2 seconds, average the sigmoid outputs
+async function captureAndDecide() {
+  isCapturing = true;
+  const btn = document.getElementById("captureBtn");
+  const bar = document.getElementById("statusBar");
+  const finalBox = document.getElementById("finalResult");
+
+  btn.disabled = true;
+  finalBox.style.display = "none";
+  bar.className = "capturing";
+
+  const TOTAL_FRAMES = 10;
+  const INTERVAL_MS  = 200;   // 10 frames × 200ms = 2 seconds
+  const probs = [];
+
+  for (let i = 0; i < TOTAL_FRAMES; i++) {
+    const remaining = Math.ceil(((TOTAL_FRAMES - i) * INTERVAL_MS) / 1000);
+    bar.textContent = `⏱ Capturing… ${remaining}s`;
+
+    const prob = await inferCurrentFrame();
+    probs.push(prob);
+    await sleep(INTERVAL_MS);
+  }
+
+  const avgProb = probs.reduce((a, b) => a + b, 0) / probs.length;
+  const isReal  = avgProb > 0.5;
+
+  finalBox.style.display = "block";
+  finalBox.className     = isReal ? "real" : "spoof";
+  finalBox.textContent   = isReal
+    ? `✅ REAL  (score: ${avgProb.toFixed(3)})`
+    : `🚫 SPOOF  (score: ${avgProb.toFixed(3)})`;
+
+  bar.className   = "";
+  bar.textContent = "Tap Capture to check again";
+  btn.style.display = "inline-block";
+  btn.disabled = false;
+  isCapturing  = false;
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// Run one spoof inference on the current canvas frame, return sigmoid prob
+async function inferCurrentFrame() {
+  const canvas = document.getElementById("canvas");
+  const imageData = canvas.getContext("2d").getImageData(0, 0, 224, 224).data;
+  const floatData = new Float32Array(1 * 3 * 224 * 224);
+  const mean = [0.485, 0.456, 0.406];
+  const std  = [0.229, 0.224, 0.225];
+  for (let i = 0; i < 224 * 224; i++) {
+    const r = imageData[i * 4]     / 255;
+    const g = imageData[i * 4 + 1] / 255;
+    const b = imageData[i * 4 + 2] / 255;
+    floatData[i]             = (r - mean[0]) / std[0];
+    floatData[i + 224*224]   = (g - mean[1]) / std[1];
+    floatData[i + 2*224*224] = (b - mean[2]) / std[2];
+  }
+  const tensor  = new ort.Tensor("float32", floatData, [1, 3, 224, 224]);
+  const results = await session.run({ input: tensor });
+  const logit   = results.output.data[0];
+  return 1 / (1 + Math.exp(-logit));
+}
+
+document.getElementById("captureBtn").addEventListener("click", captureAndDecide);
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  ORIGINAL CODE — untouched below this line
 // ─────────────────────────────────────────────────────────────────────────────
-let session;
-let currentFacingMode = "user";
-let isFrontCamera = true;
-let currentStream = null;
+let currentStream2 = null;
 
 async function init() {
-  // Load both models in parallel — faster startup
   const [_ort] = await Promise.all([
     ort.InferenceSession.create("spoofnet.onnx"),
     loadFaceApi()
   ]);
   session = _ort;
-  document.getElementById("result").innerText = "Models loaded. Starting camera...";
+  document.getElementById("statusBar").textContent = "Models loaded. Starting camera…";
   startCamera(currentFacingMode);
 }
 
 async function startCamera(facingMode) {
   const video = document.getElementById("video");
-  if (currentStream) {
-    currentStream.getTracks().forEach(track => track.stop());
-  }
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: facingMode }
-  });
+  if (currentStream) currentStream.getTracks().forEach(t => t.stop());
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode } });
   currentStream = stream;
   video.srcObject = stream;
   currentFacingMode = facingMode;
@@ -178,31 +281,28 @@ async function runLoop() {
   }
   ctx.restore();
 
-  const imageData = ctx.getImageData(0, 0, 224, 224).data;
-  const floatData = new Float32Array(1 * 3 * 224 * 224);
-  const mean = [0.485, 0.456, 0.406];
-  const std  = [0.229, 0.224, 0.225];
-  for (let i = 0; i < 224 * 224; i++) {
-    const r = imageData[i * 4]     / 255;
-    const g = imageData[i * 4 + 1] / 255;
-    const b = imageData[i * 4 + 2] / 255;
-    floatData[i]             = (r - mean[0]) / std[0];
-    floatData[i + 224*224]   = (g - mean[1]) / std[1];
-    floatData[i + 2*224*224] = (b - mean[2]) / std[2];
+  // Keep canvas fresh for inferCurrentFrame() during capture
+  // Distance detection runs always; spoof inference only when not capturing
+  runFaceDetection(canvas);
+  updateUI();
+
+  if (!isCapturing) {
+    const imageData = canvas.getContext("2d").getImageData(0, 0, 224, 224).data;
+    const floatData = new Float32Array(1 * 3 * 224 * 224);
+    const mean = [0.485, 0.456, 0.406];
+    const std  = [0.229, 0.224, 0.225];
+    for (let i = 0; i < 224 * 224; i++) {
+      const r = imageData[i * 4]     / 255;
+      const g = imageData[i * 4 + 1] / 255;
+      const b = imageData[i * 4 + 2] / 255;
+      floatData[i]             = (r - mean[0]) / std[0];
+      floatData[i + 224*224]   = (g - mean[1]) / std[1];
+      floatData[i + 2*224*224] = (b - mean[2]) / std[2];
+    }
+    const tensor  = new ort.Tensor("float32", floatData, [1, 3, 224, 224]);
+    const results = await session.run({ input: tensor });
+    // live score intentionally not shown — final result shown after capture only
   }
-
-  const tensor  = new ort.Tensor("float32", floatData, [1, 3, 224, 224]);
-  const results = await session.run({ input: tensor });
-  const logit   = results.output.data[0];
-  const prob    = 1 / (1 + Math.exp(-logit));
-
-  document.getElementById("result").innerText =
-    prob > 0.5 ? `REAL (${prob.toFixed(3)})`
-               : `ATTACK (${prob.toFixed(3)})`;
-
-  // ── Face distance — non-blocking, throttled, runs on the same canvas ──────
-  runFaceDetection(canvas);   // fire-and-forget, updates latestFaceBoxWidth
-  updateDistanceBadge();
 
   requestAnimationFrame(runLoop);
 }
