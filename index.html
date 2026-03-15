@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Anti-Spoof Live</title>
+  <title>Face Liveness Check</title>
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
   <style>
@@ -11,30 +11,40 @@
 
     body {
       text-align: center;
-      font-family: Arial;
-      overflow-x: hidden;
-      background: #fff;
+      font-family: Arial, sans-serif;
+      background: #f5f5f5;
+      padding-bottom: 32px;
     }
 
-    h2 {
-      font-size: 26px;
-      margin: 16px 0 4px;
+    /* ── Header ── */
+    .header {
+      padding: 20px 16px 12px;
     }
 
-    .subtitle {
+    .header h1 {
+      font-size: 22px;
+      font-weight: 800;
+      color: #111;
+      letter-spacing: 0.3px;
+    }
+
+    .header p {
       font-size: 13px;
-      color: #888;
-      margin-bottom: 10px;
+      font-weight: 600;
+      color: #666;
+      margin-top: 4px;
     }
 
-    /* ── Video wrapper — portrait oval ── */
+    /* ── Oval video window ── */
     .video-wrapper {
       position: relative;
-      width: min(300px, calc(100vw - 24px));
-      height: min(380px, calc((100vw - 24px) * 1.27));
+      width: min(280px, calc(100vw - 32px));
+      height: min(355px, calc((100vw - 32px) * 1.27));
       margin: 0 auto;
       overflow: hidden;
       border-radius: 50%;
+      border: 3px solid #ccc;
+      background: #000;
     }
 
     video {
@@ -44,7 +54,6 @@
       display: block;
     }
 
-    /* Dark vignette */
     .video-wrapper::after {
       content: "";
       position: absolute;
@@ -53,48 +62,38 @@
       background: radial-gradient(
         ellipse 42% 48% at center,
         transparent 0%,
-        transparent 86%,
-        rgba(0,0,0,0.78) 87%
+        transparent 85%,
+        rgba(0,0,0,0.72) 86%
       );
-      border-radius: 50%;
     }
 
-    /* ── Progress ring — sized to match wrapper exactly ── */
-    .ring-wrap {
-      position: absolute;
-      inset: 0;
-      pointer-events: none;
+    /* ── Progress bar ── */
+    .progress-wrap {
+      width: min(280px, calc(100vw - 32px));
+      margin: 12px auto 0;
+      height: 6px;
+      background: #ddd;
+      border-radius: 4px;
+      overflow: hidden;
     }
 
-    #progressRing {
-      width: 100%;
+    .progress-fill {
       height: 100%;
-      /* viewBox matches wrapper aspect: 300 wide × 380 tall */
+      width: 0%;
+      background: #39ff14;
+      box-shadow: 0 0 8px #39ff14;
+      border-radius: 4px;
+      transition: width 0.1s linear;
     }
 
-    #ringTrack {
-      fill: none;
-      stroke: rgba(255,255,255,0.15);
-      stroke-width: 5;
-    }
-
-    #ringFill {
-      fill: none;
-      stroke: #39ff14;
-      stroke-width: 5;
-      stroke-linecap: round;
-      filter: drop-shadow(0 0 6px #39ff14);
-      stroke-dasharray: 0 10000;
-      transition: stroke-dasharray 0.1s linear;
-    }
-
-    /* ── Status label ── */
+    /* ── Status message ── */
     #status {
       margin: 14px auto 0;
       font-size: 15px;
-      color: #333;
-      min-height: 44px;
-      max-width: 300px;
+      font-weight: 700;
+      color: #222;
+      max-width: 280px;
+      min-height: 46px;
       line-height: 1.5;
       white-space: pre-line;
     }
@@ -102,64 +101,65 @@
     /* ── Result box ── */
     #resultBox {
       display: none;
-      margin: 16px auto;
-      width: min(300px, calc(100vw - 24px));
+      margin: 16px auto 0;
+      width: min(280px, calc(100vw - 32px));
       padding: 16px;
-      border-radius: 10px;
-      font-size: 20px;
-      font-weight: bold;
+      border-radius: 8px;
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: 0.3px;
     }
 
-    #resultBox.real   { background: #dcfce7; color: #15803d; border: 2px solid #86efac; }
-    #resultBox.attack { background: #fee2e2; color: #b91c1c; border: 2px solid #fca5a5; }
+    #resultBox.real {
+      background: #dcfce7;
+      color: #15803d;
+      border: 2px solid #86efac;
+    }
+
+    #resultBox.attack {
+      background: #fee2e2;
+      color: #b91c1c;
+      border: 2px solid #fca5a5;
+    }
 
     /* ── Retry button ── */
     #retryBtn {
       display: none;
-      margin: 10px auto 24px;
-      padding: 10px 28px;
+      margin: 14px auto 0;
+      padding: 10px 32px;
       font-size: 15px;
+      font-weight: 700;
       border: none;
       border-radius: 6px;
-      background: #3b82f6;
+      background: #2563eb;
       color: #fff;
       cursor: pointer;
+      letter-spacing: 0.3px;
     }
 
-    #retryBtn:hover { background: #2563eb; }
+    #retryBtn:hover { background: #1d4ed8; }
   </style>
 </head>
 <body>
 
-<h2>Face Liveness Check</h2>
-<p class="subtitle">Make sure you are in a well-lit area</p>
-
-<div class="video-wrapper" id="videoWrapper">
-  <video id="video" autoplay playsinline></video>
-  <div class="ring-wrap">
-    <!--
-      viewBox: 300 × 380 to match wrapper aspect ratio.
-      Ellipse: cx=150, cy=190 (centre), rx=143, ry=183 (near edges with 7px padding for stroke).
-      Circumference of ellipse ≈ π × (3(rx+ry) − √((3rx+ry)(rx+3ry)))
-      = π × (3×326 − √((3×143+183)(143+3×183)))
-      = π × (978 − √(612×732))
-      = π × (978 − √447984)
-      = π × (978 − 669.3)
-      = π × 308.7 ≈ 969.5
-      We set this in JS so the dasharray maths is exact.
-    -->
-    <svg id="progressRing" viewBox="0 0 300 380">
-      <ellipse id="ringTrack" cx="150" cy="190" rx="143" ry="183"/>
-      <ellipse id="ringFill"  cx="150" cy="190" rx="143" ry="183"/>
-    </svg>
+  <div class="header">
+    <h1>Face Liveness Check</h1>
+    <p>Ensure good lighting and look directly at the camera</p>
   </div>
-</div>
 
-<p id="status">Loading models...</p>
-<div id="resultBox"></div>
-<button id="retryBtn" onclick="retry()">Try Again</button>
+  <div class="video-wrapper">
+    <video id="video" autoplay playsinline></video>
+  </div>
 
-<canvas id="canvas" width="224" height="224" style="display:none;"></canvas>
+  <div class="progress-wrap">
+    <div class="progress-fill" id="progressFill"></div>
+  </div>
+
+  <p id="status">Loading models...</p>
+  <div id="resultBox"></div>
+  <button id="retryBtn" onclick="retry()">Try Again</button>
+
+  <canvas id="canvas" width="224" height="224" style="display:none;"></canvas>
 
 <script>
   // ── Config ────────────────────────────────────────────────────────────────
@@ -171,14 +171,8 @@
   const MEAN = [0.485, 0.456, 0.406];
   const STD  = [0.229, 0.224, 0.225];
 
-  // Oval bounding rect as fractions (narrower horizontally)
+  // Oval bounding rect as fractions
   const OVAL = { x1: 0.25, y1: 0.0, x2: 0.75, y2: 1.0 };
-
-  // ── Ellipse circumference (Ramanujan approximation) ───────────────────────
-  // rx=143, ry=183
-  const RX = 143, RY = 183;
-  const h  = Math.pow((RX - RY) / (RX + RY), 2);
-  const CIRCUMFERENCE = Math.PI * (RX + RY) * (1 + (3 * h) / (10 + Math.sqrt(4 - 3 * h)));
 
   // ── State ─────────────────────────────────────────────────────────────────
   let session, currentStream;
@@ -187,19 +181,9 @@
   let alignStart        = null;
   let phase             = "aligning";
 
-  // ── Ring helpers ──────────────────────────────────────────────────────────
-  const ringFill = document.getElementById("ringFill");
-
-  // Rotate start point to top of ellipse
-  // SVG ellipse starts drawing from rightmost point — offset by -90deg via transform
-  ringFill.style.transformOrigin = "150px 190px";
-  ringFill.style.transform       = "rotate(-90deg)";
-  document.getElementById("ringTrack").style.transformOrigin = "150px 190px";
-  document.getElementById("ringTrack").style.transform       = "rotate(-90deg)";
-
-  function setRing(fraction) {
-    const filled = fraction * CIRCUMFERENCE;
-    ringFill.style.strokeDasharray = `${filled} ${CIRCUMFERENCE + 10}`;
+  // ── Progress bar ──────────────────────────────────────────────────────────
+  function setProgress(fraction) {
+    document.getElementById("progressFill").style.width = `${fraction * 100}%`;
   }
 
   // ── Boot ──────────────────────────────────────────────────────────────────
@@ -209,7 +193,6 @@
       ort.InferenceSession.create("spoofnet.onnx").then(s => { session = s; }),
       faceapi.nets.tinyFaceDetector.loadFromUri(WEIGHTS_URL)
     ]);
-    setStatus("Starting camera...");
     await startCamera("user");
   }
 
@@ -224,7 +207,7 @@
     video.style.transform = isFrontCamera ? "scaleX(-1)" : "scaleX(1)";
     phase      = "aligning";
     alignStart = null;
-    setRing(0);
+    setProgress(0);
     setStatus("Position your face inside the oval");
     requestAnimationFrame(alignLoop);
   }
@@ -269,26 +252,26 @@
       if (!alignStart) alignStart = now;
       const elapsed  = now - alignStart;
       const fraction = Math.min(elapsed / HOLD_DURATION_MS, 1.0);
-      setRing(fraction);
+      setProgress(fraction);
       setStatus("Hold still...");
 
       if (elapsed >= HOLD_DURATION_MS) {
         phase = "capturing";
-        setRing(1);
+        setProgress(1);
         setStatus("Analysing...");
         await capture();
         return;
       }
     } else {
       alignStart = null;
-      setRing(0);
+      setProgress(0);
 
       if (iou === 0) {
         setStatus("No face detected.\nLook directly at the camera.");
       } else if (iou < 0.20) {
         setStatus("Come closer and fill the oval\nwith your face.");
       } else {
-        setStatus("Almost there — move a little closer\nand centre your face.");
+        setStatus("Almost there.\nMove a little closer and centre your face.");
       }
     }
 
@@ -338,15 +321,15 @@
   function showResult(prob) {
     phase = "done";
     setStatus("");
-    setRing(0);
+    setProgress(0);
     const box    = document.getElementById("resultBox");
     const isReal = prob > 0.5;
     box.className  = isReal ? "real" : "attack";
     box.innerText  = isReal
-      ? `✓ Real Person  (${(prob * 100).toFixed(1)}%)`
-      : `✗ Spoof Detected  (${((1 - prob) * 100).toFixed(1)}% spoof)`;
+      ? `REAL PERSON  (${(prob * 100).toFixed(1)}%)`
+      : `SPOOF DETECTED  (${((1 - prob) * 100).toFixed(1)}% spoof)`;
     box.style.display = "block";
-    document.getElementById("retryBtn").style.display = "inline-block";
+    document.getElementById("retryBtn").style.display = "block";
   }
 
   function retry() {
@@ -354,7 +337,7 @@
     document.getElementById("retryBtn").style.display  = "none";
     phase      = "aligning";
     alignStart = null;
-    setRing(0);
+    setProgress(0);
     setStatus("Position your face inside the oval");
     requestAnimationFrame(alignLoop);
   }
