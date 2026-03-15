@@ -239,8 +239,8 @@
     if (video.readyState >= 2) {
       const det = await faceapi.detectSingleFace(video, DETECTOR_OPTIONS);
       if (det) {
-        const vw = video.videoWidth  || video.clientWidth;
-        const vh = video.videoHeight || video.clientHeight;
+        const vw = video.clientWidth;
+        const vh = video.clientHeight;
         iou     = computeIoU(det.box, vw, vh);
         aligned = iou >= OVAL_IOU_THRESH;
       }
