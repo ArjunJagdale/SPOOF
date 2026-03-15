@@ -324,13 +324,10 @@
 
     if (prob >= 0.85) {
       box.className = "real";
-      box.innerText = `REAL FACE — HIGH CONFIDENCE  (${pct}%)`;
-    } else if (prob >= 0.50) {
-      box.className = "real";
-      box.innerText = `REAL FACE — LOW CONFIDENCE  (${pct}%)`;
+      box.innerText = `REAL FACE`;
     } else {
       box.className = "attack";
-      box.innerText = `SPOOF DETECTED  (${(100 - parseFloat(pct)).toFixed(1)}% spoof)`;
+      box.innerText = `SPOOF DETECTED`;
     }
 
     box.style.display = "block";
