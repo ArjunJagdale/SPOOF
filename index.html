@@ -167,7 +167,7 @@
   const DETECTOR_OPTIONS = new faceapi.TinyFaceDetectorOptions({ scoreThreshold: 0.5 });
   const HOLD_DURATION_MS = 1500;
   const CAPTURE_FRAMES   = 15;
-  const OVAL_IOU_THRESH  = 0.60;
+  const OVAL_IOU_THRESH  = 0.58;
   const MEAN = [0.485, 0.456, 0.406];
   const STD  = [0.229, 0.224, 0.225];
 
@@ -272,47 +272,11 @@
     requestAnimationFrame(alignLoop);
   }
 
-  // ── Brightness check — average luminance of centre crop ──────────────────
-  function getFrameBrightness(ctx) {
-    const patch  = ctx.getImageData(56, 56, 112, 112).data;
-    let total    = 0;
-    const pixels = 112 * 112;
-    for (let i = 0; i < pixels; i++) {
-      total += 0.299 * patch[i * 4]
-             + 0.587 * patch[i * 4 + 1]
-             + 0.114 * patch[i * 4 + 2];
-    }
-    return total / pixels; // 0–255
-  }
-
   // ── Capture ───────────────────────────────────────────────────────────────
   async function capture() {
     const video  = document.getElementById("video");
     const canvas = document.getElementById("canvas");
     const ctx    = canvas.getContext("2d");
-
-    // Draw one frame first to check brightness before committing
-    ctx.save();
-    if (isFrontCamera) {
-      ctx.scale(-1, 1);
-      ctx.drawImage(video, -224, 0, 224, 224);
-    } else {
-      ctx.drawImage(video, 0, 0, 224, 224);
-    }
-    ctx.restore();
-
-    const brightness = getFrameBrightness(ctx);
-
-    if (brightness < 40) {
-      phase      = "aligning";
-      alignStart = null;
-      setProgress(0);
-      setStatus("Poor lighting detected.\nMove to a brighter area and try again.");
-      requestAnimationFrame(alignLoop);
-      return;
-    }
-
-    // Lighting OK — capture all frames
     const logits = [];
 
     for (let i = 0; i < CAPTURE_FRAMES; i++) {
@@ -358,13 +322,10 @@
 
     if (prob >= 0.85) {
       box.className = "real";
-      box.innerText = `REAL FACE — HIGH CONFIDENCE  (${pct}%)`;
-    } else if (prob >= 0.50) {
-      box.className = "real";
-      box.innerText = `REAL FACE — LOW CONFIDENCE  (${pct}%)`;
+      box.innerText = `REAL FACE`;
     } else {
       box.className = "attack";
-      box.innerText = `SPOOF DETECTED  (${(100 - parseFloat(pct)).toFixed(1)}% spoof)`;
+      box.innerText = `SPOOF DETECTED`;
     }
 
     box.style.display = "block";
