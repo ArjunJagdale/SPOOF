@@ -167,7 +167,7 @@
   const DETECTOR_OPTIONS = new faceapi.TinyFaceDetectorOptions({ scoreThreshold: 0.5 });
   const HOLD_DURATION_MS = 1500;
   const CAPTURE_FRAMES   = 15;
-  const OVAL_IOU_THRESH  = 0.58;
+  const OVAL_IOU_THRESH  = 0.42;
   const MEAN = [0.485, 0.456, 0.406];
   const STD  = [0.229, 0.224, 0.225];
 
@@ -239,10 +239,12 @@
     if (video.readyState >= 2) {
       const det = await faceapi.detectSingleFace(video, DETECTOR_OPTIONS);
       if (det) {
-        const vw = video.clientWidth;
-        const vh = video.clientHeight;
+        const vw = video.videoWidth  || video.clientWidth;
+        const vh = video.videoHeight || video.clientHeight;
         iou     = computeIoU(det.box, vw, vh);
         aligned = iou >= OVAL_IOU_THRESH;
+        // DEBUG — remove once tuned
+        setStatus(`iou:${iou.toFixed(3)} box:${det.box.x.toFixed(0)},${det.box.y.toFixed(0)} ${det.box.width.toFixed(0)}x${det.box.height.toFixed(0)} vw:${vw} vh:${vh}`);
       }
     }
 
@@ -322,10 +324,13 @@
 
     if (prob >= 0.85) {
       box.className = "real";
-      box.innerText = `REAL FACE`;
+      box.innerText = `REAL FACE — HIGH CONFIDENCE  (${pct}%)`;
+    } else if (prob >= 0.50) {
+      box.className = "real";
+      box.innerText = `REAL FACE — LOW CONFIDENCE  (${pct}%)`;
     } else {
       box.className = "attack";
-      box.innerText = `SPOOF DETECTED`;
+      box.innerText = `SPOOF DETECTED  (${(100 - parseFloat(pct)).toFixed(1)}% spoof)`;
     }
 
     box.style.display = "block";
