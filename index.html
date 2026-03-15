@@ -5,360 +5,169 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Anti-Spoof Live</title>
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { text-align: center; font-family: Arial; overflow-x: hidden; background: #f5f5f5; }
-  h2 { font-size: 28px; margin: 16px 0 6px; }
-  .instructions {
-    font-size: 14px; color: #555; max-width: 360px;
-    margin: 6px auto 14px; line-height: 1.5; padding: 0 12px;
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
   }
 
-  /* ── video box ── */
+  body {
+    text-align: center;
+    font-family: Arial;
+    overflow-x: hidden;
+  }
+
+  h2 {
+    font-size: 30px;
+    margin: 16px 0 6px;
+  }
+
+  .instructions {
+    font-size: 15px;
+    color: #444;
+    max-width: 360px;
+    margin: 8px auto 16px;
+    line-height: 1.4;
+    padding: 0 12px;
+  }
+
   .video-wrapper {
     position: relative;
     width: min(400px, calc(100vw - 24px));
     height: min(400px, calc(100vw - 24px));
     margin: 0 auto;
-    /* NO overflow:hidden — so the oval ring SVG is never clipped */
-  }
-  video {
-    width: 100%; height: 100%;
-    object-fit: cover; display: block;
-    border-radius: 4px;
-  }
-
-  /* dark vignette mask — separate element so ring sits above it */
-  .vignette {
-    position: absolute; inset: 0; pointer-events: none; z-index: 1;
-    background: radial-gradient(
-      ellipse 35% 45% at center,
-      transparent 0%, transparent 88%, rgba(0,0,0,0.82) 89%
-    );
-  }
-
-  /* oval ring — sits above vignette, clipping-safe because wrapper has no overflow:hidden */
-  .oval-ring {
-    position: absolute; inset: 0; pointer-events: none; z-index: 2;
-  }
-  /* rx=136 ry=194 → ellipse stays fully inside 400×400 viewBox (200±194=6..394) */
-  #ovalRing {
-    transition: stroke 0.25s ease;
-  }
-
-  /* ── progress bar (straight, under the oval) ── */
-  .progress-wrap {
-    width: min(400px, calc(100vw - 24px));
-    margin: 8px auto 0;
-    height: 6px;
-    background: #ddd;
-    border-radius: 999px;
     overflow: hidden;
   }
-  #progressBar {
+
+  video {
+    width: 100%;
     height: 100%;
-    width: 0%;
-    border-radius: 999px;
-    background: #1a7a37;
-    transition: width 0.18s linear, background 0.25s ease;
+    object-fit: cover;
+    display: block;
   }
 
-  /* ── status text ── */
-  #statusBar {
-    margin: 8px auto 0;
-    max-width: min(400px, calc(100vw - 24px));
-    padding: 8px 14px; border-radius: 8px;
-    font-size: 15px; font-weight: 600;
-    background: #e0e0e0; color: #333;
-    transition: background 0.25s, color 0.25s;
+  .video-wrapper::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(
+        ellipse 35% 55% at center,
+        transparent 0%,
+        transparent 90%,
+        rgba(0, 0, 0, 0.80) 91%
+      );
   }
-  #statusBar.far       { background: #fff3cd; color: #856404; }
-  #statusBar.close     { background: #ffe0e0; color: #c0392b; }
-  #statusBar.ready     { background: #d4f7dc; color: #1a7a37; }
-  #statusBar.capturing { background: #cce5ff; color: #004085; }
-  #statusBar.aborted   { background: #ffe0e0; color: #c0392b; }
-
-  /* ── final result ── */
-  #finalResult {
-    display: none;
-    margin: 10px auto 0;
-    max-width: min(400px, calc(100vw - 24px));
-    padding: 14px 20px; border-radius: 10px;
-    font-size: 20px; font-weight: 700;
-  }
-  #finalResult.real  { background: #d4f7dc; color: #1a7a37; }
-  #finalResult.spoof { background: #ffe0e0; color: #c0392b; }
 </style>
 </head>
 <body>
-<h2>Face Liveness Check</h2>
+
+<h2>Live Anti-Spoof</h2>
+
 <p class="instructions">
-  Move your face slowly into the oval — capturing starts automatically.
+  • Ensure your face is clearly visible in good lighting (avoid harsh reflections).<br>
+  • Align and fit your face tightly within the oval.
 </p>
 
 <div class="video-wrapper">
   <video id="video" autoplay playsinline></video>
-  <div class="vignette"></div>
-
-  <!-- oval ring — rx/ry sized to stay fully inside 400×400 viewBox -->
-  <svg class="oval-ring" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg">
-    <ellipse id="ovalRing"
-             cx="200" cy="200" rx="136" ry="194"
-             fill="none" stroke="#ffffff" stroke-width="3" opacity="0.8"/>
-  </svg>
 </div>
 
-<!-- straight progress bar directly under the oval -->
-<div class="progress-wrap">
-  <div id="progressBar"></div>
-</div>
-
-<div id="statusBar">Loading models…</div>
-<div id="finalResult"></div>
-
-<!-- hidden canvas for inference -->
 <canvas id="canvas" width="224" height="224" style="display:none;"></canvas>
+<p id="result" style="margin-top:12px;">Loading model...</p>
 
 <script>
-// ─────────────────────────────────────────────────────────────────────────────
-//  CONFIG
-// ─────────────────────────────────────────────────────────────────────────────
-const FILL_MIN    = 0.60;  // face box ≥ 60% of 224px canvas width = aligned
-const FILL_MAX    = 0.85;  // face box ≤ 85% = not too close
-const HOLD_FRAMES = 3;     // consecutive in-range detections before auto-capture
-const TOTAL_FRAMES = 5;    // inference frames sampled during capture
-const INTERVAL_MS  = 200;  // gap between frames → 5×200ms ≈ 1 second total
-
-const MODEL_URL     = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model";
-const DETECTOR_OPTS = new faceapi.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.4 });
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  STATE
-// ─────────────────────────────────────────────────────────────────────────────
-let session      = null;
+let session;
+let currentFacingMode = "user"; // default front
+let isFrontCamera = true;
 let currentStream = null;
-let faceApiReady = false;
-let latestFill   = null;   // 0–1 ratio of face width vs canvas width; null = no face
-let isCapturing  = false;
-let holdCount    = 0;
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  FACE-API  — TinyFaceDetector, WebGL backend, zero WASM conflict with ORT
-// ─────────────────────────────────────────────────────────────────────────────
-async function loadFaceApi() {
-  await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-  faceApiReady = true;
+async function init() {
+  session = await ort.InferenceSession.create("spoofnet.onnx");
+  document.getElementById("result").innerText = "Model loaded. Starting camera...";
+  startCamera(currentFacingMode);
 }
 
-let lastDetectTime = 0;
-async function runFaceDetection(canvas) {
-  if (!faceApiReady) return;
-  const now = performance.now();
-  if (now - lastDetectTime < 120) return;  // ~8 fps — enough for fill ratio
-  lastDetectTime = now;
-  const det = await faceapi.detectSingleFace(canvas, DETECTOR_OPTS);
-  latestFill = (det && det.box.width > 0) ? det.box.width / 224 : null;
-}
+async function startCamera(facingMode) {
+  const video = document.getElementById("video");
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  UI HELPERS
-// ─────────────────────────────────────────────────────────────────────────────
-function setRingColor(color) {
-  document.getElementById("ovalRing").setAttribute("stroke", color);
-}
-
-function setProgress(fraction) {   // 0–1
-  const bar = document.getElementById("progressBar");
-  bar.style.width = (fraction * 100) + "%";
-}
-
-function setProgressColor(color) {
-  document.getElementById("progressBar").style.background = color;
-}
-
-function resetProgress() {
-  setProgress(0);
-  setProgressColor("#1a7a37");
-}
-
-function setStatus(cls, msg) {
-  const bar = document.getElementById("statusBar");
-  bar.className   = cls;
-  bar.textContent = msg;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  UI UPDATE — runs every rAF tick, skipped while capturing
-// ─────────────────────────────────────────────────────────────────────────────
-function updateUI() {
-  if (isCapturing) return;
-
-  if (latestFill === null) {
-    holdCount = 0;
-    setRingColor("#ffffff");
-    resetProgress();
-    setStatus("", "📷 No face detected — look at the camera");
-    return;
+  if (currentStream) {
+    currentStream.getTracks().forEach(track => track.stop());
   }
 
-  if (latestFill < FILL_MIN) {
-    holdCount = 0;
-    setRingColor("#f0ad4e");
-    resetProgress();
-    setStatus("far", "🔍 Move closer to fit your face in the oval…");
-    return;
-  }
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: facingMode }
+  });
 
-  if (latestFill > FILL_MAX) {
-    holdCount = 0;
-    setRingColor("#e74c3c");
-    resetProgress();
-    setStatus("close", "↔️ Too close — move back a little");
-    return;
-  }
+  currentStream = stream;
+  video.srcObject = stream;
 
-  // face is in the good zone
-  holdCount++;
-  setRingColor("#1a7a37");
-  setStatus("ready", "✅ Hold still… starting capture");
+  currentFacingMode = facingMode;
+  isFrontCamera = facingMode === "user";
 
-  if (holdCount >= HOLD_FRAMES) {
-    holdCount = 0;
-    captureAndDecide();
-  }
+  // Flip only front camera visually
+  video.style.transform = isFrontCamera ? "scaleX(-1)" : "scaleX(1)";
+
+  runLoop();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  INFERENCE — only called during capture, reads current canvas snapshot
-// ─────────────────────────────────────────────────────────────────────────────
-async function inferCurrentFrame() {
-  const canvas    = document.getElementById("canvas");
-  const imageData = canvas.getContext("2d").getImageData(0, 0, 224, 224).data;
+// Optional: double tap to switch camera (no UI change)
+document.addEventListener("dblclick", () => {
+  const newMode = currentFacingMode === "user" ? "environment" : "user";
+  startCamera(newMode);
+});
+
+async function runLoop() {
+  const video = document.getElementById("video");
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
+
+  ctx.save();
+
+  if (isFrontCamera) {
+    // Flip canvas only for front camera
+    ctx.scale(-1, 1);
+    ctx.drawImage(video, -224, 0, 224, 224);
+  } else {
+    // Rear camera not flipped
+    ctx.drawImage(video, 0, 0, 224, 224);
+  }
+
+  ctx.restore();
+
+  const imageData = ctx.getImageData(0, 0, 224, 224).data;
   const floatData = new Float32Array(1 * 3 * 224 * 224);
+
   const mean = [0.485, 0.456, 0.406];
   const std  = [0.229, 0.224, 0.225];
+
   for (let i = 0; i < 224 * 224; i++) {
     const r = imageData[i * 4]     / 255;
     const g = imageData[i * 4 + 1] / 255;
     const b = imageData[i * 4 + 2] / 255;
-    floatData[i]               = (r - mean[0]) / std[0];
-    floatData[i +   224 * 224] = (g - mean[1]) / std[1];
-    floatData[i + 2 * 224 * 224] = (b - mean[2]) / std[2];
+
+    floatData[i]             = (r - mean[0]) / std[0];
+    floatData[i + 224*224]   = (g - mean[1]) / std[1];
+    floatData[i + 2*224*224] = (b - mean[2]) / std[2];
   }
-  const tensor  = new ort.Tensor("float32", floatData, [1, 3, 224, 224]);
+
+  const tensor = new ort.Tensor("float32", floatData, [1, 3, 224, 224]);
   const results = await session.run({ input: tensor });
-  return 1 / (1 + Math.exp(-results.output.data[0]));  // sigmoid
-}
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+  const logit = results.output.data[0];
+  const prob = 1 / (1 + Math.exp(-logit));
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  AUTO CAPTURE
-//  • TOTAL_FRAMES inferences over ~1 second
-//  • Checks misalignment before every frame — aborts if face leaves zone
-//  • Averages scores → REAL / SPOOF
-//  • Auto-resets after 3 seconds
-// ─────────────────────────────────────────────────────────────────────────────
-async function captureAndDecide() {
-  if (isCapturing) return;
-  isCapturing = true;
-
-  const finalBox = document.getElementById("finalResult");
-  finalBox.style.display = "none";
-  resetProgress();
-
-  const probs = [];
-
-  for (let i = 0; i < TOTAL_FRAMES; i++) {
-    // abort if face left the zone
-    if (latestFill === null || latestFill < FILL_MIN || latestFill > FILL_MAX) {
-      setRingColor("#e74c3c");
-      setProgressColor("#e74c3c");
-      setProgress(i / TOTAL_FRAMES);
-      setStatus("aborted", "⚠️ Face moved — please realign and try again");
-      await sleep(1500);
-      resetProgress();
-      setRingColor("#ffffff");
-      isCapturing = false;
-      return;
-    }
-
-    setProgress((i + 1) / TOTAL_FRAMES);
-    setStatus("capturing", `⏱ Scanning… ${TOTAL_FRAMES - i} frame${TOTAL_FRAMES - i !== 1 ? "s" : ""} left`);
-
-    probs.push(await inferCurrentFrame());
-    await sleep(INTERVAL_MS);
-  }
-
-  // result
-  const avgProb = probs.reduce((a, b) => a + b, 0) / probs.length;
-  const isReal  = avgProb > 0.5;
-
-  setProgress(1);
-  setProgressColor(isReal ? "#1a7a37" : "#e74c3c");
-  setRingColor(isReal ? "#1a7a37" : "#e74c3c");
-
-  finalBox.style.display = "block";
-  finalBox.className     = isReal ? "real" : "spoof";
-  finalBox.textContent   = isReal
-    ? `✅ REAL  (${avgProb.toFixed(3)})`
-    : `🚫 SPOOF  (${avgProb.toFixed(3)})`;
-
-  setStatus(
-    isReal ? "ready" : "aborted",
-    isReal ? "✅ Verified! Move away to scan again." : "🚫 Spoof detected. Try again."
-  );
-
-  // auto-reset after 3 s
-  await sleep(3000);
-  resetProgress();
-  setRingColor("#ffffff");
-  finalBox.style.display = "none";
-  isCapturing = false;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  CAMERA + MAIN LOOP
-// ─────────────────────────────────────────────────────────────────────────────
-async function init() {
-  const [_session] = await Promise.all([
-    ort.InferenceSession.create("spoofnet.onnx"),
-    loadFaceApi()
-  ]);
-  session = _session;
-  setStatus("", "Models loaded. Starting camera…");
-  startCamera();
-}
-
-async function startCamera() {
-  const video = document.getElementById("video");
-  if (currentStream) currentStream.getTracks().forEach(t => t.stop());
-  const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
-  currentStream = stream;
-  video.srcObject = stream;
-  video.style.transform = "scaleX(-1)";  // mirror front cam
-  runLoop();
-}
-
-function runLoop() {
-  const video  = document.getElementById("video");
-  const canvas = document.getElementById("canvas");
-  const ctx    = canvas.getContext("2d");
-
-  // draw mirrored frame — matches what user sees
-  ctx.save();
-  ctx.scale(-1, 1);
-  ctx.drawImage(video, -224, 0, 224, 224);
-  ctx.restore();
-
-  runFaceDetection(canvas);  // async, throttled, updates latestFill
-  updateUI();                // sync, fast
+  document.getElementById("result").innerText =
+    prob > 0.5 ? `REAL (${prob.toFixed(3)})`
+               : `ATTACK (${prob.toFixed(3)})`;
 
   requestAnimationFrame(runLoop);
 }
 
 init();
 </script>
+
 </body>
 </html>
