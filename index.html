@@ -4,29 +4,20 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Anti-Spoof Live</title>
+
+  <!-- ONNX Runtime for spoof model -->
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+
+  <!-- vladmandic/face-api — actively maintained fork, WebGL backend, NO WASM conflict -->
+  <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js"></script>
+
 <style>
-  * {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
-  }
-  body {
-    text-align: center;
-    font-family: Arial;
-    overflow-x: hidden;
-  }
-  h2 {
-    font-size: 30px;
-    margin: 16px 0 6px;
-  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { text-align: center; font-family: Arial; overflow-x: hidden; }
+  h2 { font-size: 30px; margin: 16px 0 6px; }
   .instructions {
-    font-size: 15px;
-    color: #444;
-    max-width: 360px;
-    margin: 8px auto 16px;
-    line-height: 1.4;
-    padding: 0 12px;
+    font-size: 15px; color: #444; max-width: 360px;
+    margin: 8px auto 16px; line-height: 1.4; padding: 0 12px;
   }
   .video-wrapper {
     position: relative;
@@ -35,38 +26,22 @@
     margin: 0 auto;
     overflow: hidden;
   }
-  video {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    display: block;
-  }
+  video { width: 100%; height: 100%; object-fit: cover; display: block; }
   .video-wrapper::after {
     content: "";
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    background:
-      radial-gradient(
-        ellipse 35% 55% at center,
-        transparent 0%,
-        transparent 90%,
-        rgba(0, 0, 0, 0.80) 91%
-      );
+    position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(
+      ellipse 35% 55% at center,
+      transparent 0%, transparent 90%, rgba(0,0,0,0.80) 91%
+    );
   }
 
-  /* ── Distance badge ── */
+  /* Distance badge */
   #distanceBadge {
-    display: inline-block;
-    margin-top: 10px;
-    padding: 6px 18px;
-    border-radius: 999px;
-    font-size: 15px;
-    font-weight: 600;
-    letter-spacing: 0.4px;
-    transition: background 0.3s, color 0.3s;
-    background: #e8e8e8;
-    color: #333;
+    display: inline-block; margin-top: 10px; padding: 6px 18px;
+    border-radius: 999px; font-size: 15px; font-weight: 600;
+    letter-spacing: 0.4px; transition: background 0.3s, color 0.3s;
+    background: #e8e8e8; color: #333;
   }
   #distanceBadge.close { background: #ffe0e0; color: #c0392b; }
   #distanceBadge.good  { background: #d4f7dc; color: #1a7a37; }
@@ -83,96 +58,60 @@
   <video id="video" autoplay playsinline></video>
 </div>
 <canvas id="canvas" width="224" height="224" style="display:none;"></canvas>
-<p id="result" style="margin-top:12px;">Loading model...</p>
+<p id="result" style="margin-top:12px;">Loading models...</p>
 <div id="distanceBadge">📏 Distance: —</div>
 
 <script>
 // ─────────────────────────────────────────────────────────────────────────────
-//  DISTANCE ESTIMATION — pure pixel math, zero external libraries
+//  DISTANCE CONFIG
+//  Pinhole formula: distance_cm = (KNOWN_WIDTH_CM × FOCAL_PX) / face_box_width_px
 //
-//  We reuse the exact same 224×224 imageData already drawn for the spoof model.
-//  Steps:
-//    1. Scan every pixel for skin tone (works across light/dark skin via YCbCr)
-//    2. Find the leftmost & rightmost skin-pixel X columns → face width in px
-//    3. Apply pinhole camera formula:
-//         distance (cm) = (KNOWN_FACE_WIDTH_CM × FOCAL_PX) / face_px_width
-//
-//  Focal length is calibrated for the 224×224 canvas:
-//    At 60 cm a typical face fills ~60% of the 224px canvas → ~134 px wide
-//    focal = 134 × 60 / 14 ≈ 574
-//  ⚙️  Tweak FOCAL_PX below if readings feel off on your device.
+//  FOCAL_PX is calibrated for a 224×224 canvas:
+//    Typical face at 60 cm fills ~134 px → focal = 134 × 60 / 14 ≈ 574
+//  ⚙️  Sit 60 cm away, check reading, nudge FOCAL_PX until it shows ~60.
 // ─────────────────────────────────────────────────────────────────────────────
-const KNOWN_FACE_WIDTH_CM = 14;  // average adult inter-cheek width
-const FOCAL_PX            = 574; // calibrated for 224px canvas, ~60 cm ref dist
+const KNOWN_FACE_WIDTH_CM = 14;   // average adult face width
+const FOCAL_PX            = 574;  // calibrated for 224px canvas at ~60 cm
+const GOOD_MIN_CM         = 25;   // green zone min — adjust to your oval
+const GOOD_MAX_CM         = 38;   // green zone max — adjust to your oval
 
-// Tight-oval target range in cm — adjust to match your oval
-const GOOD_MIN_CM = 25;
-const GOOD_MAX_CM = 38;
+// MODEL URL — weights served directly from CDN, nothing to commit to your repo
+const MODEL_URL = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model";
 
-// Minimum skin pixels needed to trust the reading (filters out stray noise)
-const MIN_SKIN_PIXELS = 300;
+let faceApiReady = false;
+let latestFaceBoxWidth = null;   // px on 224×224 canvas
 
-/**
- * isSkin(r, g, b)
- * Converts RGB → YCbCr and checks the classic skin-tone band.
- * Works reasonably well across a wide range of skin colours.
- */
-function isSkin(r, g, b) {
-  // RGB → YCbCr (BT.601)
-  const Y  =  0.299  * r + 0.587  * g + 0.114  * b;
-  const Cb = -0.1687 * r - 0.3313 * g + 0.5    * b + 128;
-  const Cr =  0.5    * r - 0.4187 * g - 0.0813 * b + 128;
-  return (
-    Y  >  80 &&
-    Cb >= 85  && Cb <= 135 &&
-    Cr >= 135 && Cr <= 180
-  );
+// Load only the tiny face detector (smallest, fastest, no landmark weights needed)
+async function loadFaceApi() {
+  await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+  faceApiReady = true;
+  console.log("✅ TinyFaceDetector loaded");
 }
 
-/**
- * estimateFaceWidthPx(imageData)
- * Scans the 224×224 RGBA pixel array.
- * Returns the horizontal span (px) of the largest contiguous skin-column band,
- * or null if not enough skin pixels were found.
- */
-function estimateFaceWidthPx(imageData) {
-  let minX = 224, maxX = 0;
-  let skinCount = 0;
+// Detection options — inputSize 160 is fastest for webcam distance estimation
+const DETECTOR_OPTS = new faceapi.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.4 });
 
-  // Only scan the centre vertical strip (rows 30–190) to ignore neck/background
-  const ROW_START = 30, ROW_END = 190;
+// Throttle: run detection at ~8 fps (plenty for distance), keep loop light
+let lastDetectTime = 0;
+async function runFaceDetection(canvas) {
+  if (!faceApiReady) return;
+  const now = performance.now();
+  if (now - lastDetectTime < 120) return;
+  lastDetectTime = now;
 
-  for (let y = ROW_START; y < ROW_END; y++) {
-    for (let x = 0; x < 224; x++) {
-      const idx = (y * 224 + x) * 4;
-      const r = imageData[idx];
-      const g = imageData[idx + 1];
-      const b = imageData[idx + 2];
-      if (isSkin(r, g, b)) {
-        skinCount++;
-        if (x < minX) minX = x;
-        if (x > maxX) maxX = x;
-      }
-    }
-  }
-
-  if (skinCount < MIN_SKIN_PIXELS || maxX <= minX) return null;
-  return maxX - minX;
+  // detectSingleFace runs on the canvas element directly (no extra copy needed)
+  const det = await faceapi.detectSingleFace(canvas, DETECTOR_OPTS);
+  latestFaceBoxWidth = det ? det.box.width : null;
 }
 
-/**
- * updateDistanceBadge(faceWidthPx)
- * Computes distance from pixel width and updates the UI badge.
- */
-function updateDistanceBadge(faceWidthPx) {
+function updateDistanceBadge() {
   const badge = document.getElementById("distanceBadge");
-  if (!faceWidthPx) {
+  if (!latestFaceBoxWidth) {
     badge.className = "";
     badge.textContent = "📏 Distance: — (no face detected)";
     return;
   }
-  const distanceCm = (KNOWN_FACE_WIDTH_CM * FOCAL_PX) / faceWidthPx;
-  const d = Math.round(distanceCm);
+  const d = Math.round((KNOWN_FACE_WIDTH_CM * FOCAL_PX) / latestFaceBoxWidth);
   if (d < GOOD_MIN_CM) {
     badge.className = "close";
     badge.textContent = `📏 ${d} cm — Too close, move back`;
@@ -194,8 +133,13 @@ let isFrontCamera = true;
 let currentStream = null;
 
 async function init() {
-  session = await ort.InferenceSession.create("spoofnet.onnx");
-  document.getElementById("result").innerText = "Model loaded. Starting camera...";
+  // Load both models in parallel — faster startup
+  const [_ort] = await Promise.all([
+    ort.InferenceSession.create("spoofnet.onnx"),
+    loadFaceApi()
+  ]);
+  session = _ort;
+  document.getElementById("result").innerText = "Models loaded. Starting camera...";
   startCamera(currentFacingMode);
 }
 
@@ -235,11 +179,6 @@ async function runLoop() {
   ctx.restore();
 
   const imageData = ctx.getImageData(0, 0, 224, 224).data;
-
-  // ── Distance estimation — reuses imageData already read for spoof model ──
-  const faceWidthPx = estimateFaceWidthPx(imageData);
-  updateDistanceBadge(faceWidthPx);
-
   const floatData = new Float32Array(1 * 3 * 224 * 224);
   const mean = [0.485, 0.456, 0.406];
   const std  = [0.229, 0.224, 0.225];
@@ -260,6 +199,10 @@ async function runLoop() {
   document.getElementById("result").innerText =
     prob > 0.5 ? `REAL (${prob.toFixed(3)})`
                : `ATTACK (${prob.toFixed(3)})`;
+
+  // ── Face distance — non-blocking, throttled, runs on the same canvas ──────
+  runFaceDetection(canvas);   // fire-and-forget, updates latestFaceBoxWidth
+  updateDistanceBadge();
 
   requestAnimationFrame(runLoop);
 }
