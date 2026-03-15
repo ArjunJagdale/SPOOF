@@ -27,11 +27,10 @@
       margin-bottom: 10px;
     }
 
-    /* ── Video wrapper — narrower oval feel ── */
+    /* ── Video wrapper — portrait oval ── */
     .video-wrapper {
       position: relative;
       width: min(300px, calc(100vw - 24px));
-      /* taller than wide → portrait oval */
       height: min(380px, calc((100vw - 24px) * 1.27));
       margin: 0 auto;
       overflow: hidden;
@@ -60,7 +59,7 @@
       border-radius: 50%;
     }
 
-    /* ── Progress ring ── */
+    /* ── Progress ring — sized to match wrapper exactly ── */
     .ring-wrap {
       position: absolute;
       inset: 0;
@@ -70,7 +69,7 @@
     #progressRing {
       width: 100%;
       height: 100%;
-      transform: rotate(-90deg);
+      /* viewBox matches wrapper aspect: 300 wide × 380 tall */
     }
 
     #ringTrack {
@@ -81,12 +80,11 @@
 
     #ringFill {
       fill: none;
-      /* neon green */
       stroke: #39ff14;
       stroke-width: 5;
       stroke-linecap: round;
       filter: drop-shadow(0 0 6px #39ff14);
-      stroke-dasharray: 0 1000;
+      stroke-dasharray: 0 10000;
       transition: stroke-dasharray 0.1s linear;
     }
 
@@ -95,9 +93,10 @@
       margin: 14px auto 0;
       font-size: 15px;
       color: #333;
-      min-height: 44px;           /* two lines reserved so layout doesn't jump */
+      min-height: 44px;
       max-width: 300px;
       line-height: 1.5;
+      white-space: pre-line;
     }
 
     /* ── Result box ── */
@@ -138,9 +137,20 @@
 <div class="video-wrapper" id="videoWrapper">
   <video id="video" autoplay playsinline></video>
   <div class="ring-wrap">
-    <svg id="progressRing" viewBox="0 0 200 200">
-      <circle id="ringTrack" cx="100" cy="100" r="96"/>
-      <circle id="ringFill"  cx="100" cy="100" r="96"/>
+    <!--
+      viewBox: 300 × 380 to match wrapper aspect ratio.
+      Ellipse: cx=150, cy=190 (centre), rx=143, ry=183 (near edges with 7px padding for stroke).
+      Circumference of ellipse ≈ π × (3(rx+ry) − √((3rx+ry)(rx+3ry)))
+      = π × (3×326 − √((3×143+183)(143+3×183)))
+      = π × (978 − √(612×732))
+      = π × (978 − √447984)
+      = π × (978 − 669.3)
+      = π × 308.7 ≈ 969.5
+      We set this in JS so the dasharray maths is exact.
+    -->
+    <svg id="progressRing" viewBox="0 0 300 380">
+      <ellipse id="ringTrack" cx="150" cy="190" rx="143" ry="183"/>
+      <ellipse id="ringFill"  cx="150" cy="190" rx="143" ry="183"/>
     </svg>
   </div>
 </div>
@@ -152,38 +162,47 @@
 <canvas id="canvas" width="224" height="224" style="display:none;"></canvas>
 
 <script>
-  // ── Config ───────────────────────────────────────────────────────────────
+  // ── Config ────────────────────────────────────────────────────────────────
   const WEIGHTS_URL      = "https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights";
   const DETECTOR_OPTIONS = new faceapi.TinyFaceDetectorOptions({ scoreThreshold: 0.5 });
   const HOLD_DURATION_MS = 1500;
   const CAPTURE_FRAMES   = 15;
-
-  // ↑ Raised from 0.28 → 0.42 so face must genuinely fill the oval
   const OVAL_IOU_THRESH  = 0.42;
-
   const MEAN = [0.485, 0.456, 0.406];
   const STD  = [0.229, 0.224, 0.225];
 
-  // Oval bounding rect as fractions — narrower horizontally (25%→75%)
+  // Oval bounding rect as fractions (narrower horizontally)
   const OVAL = { x1: 0.25, y1: 0.0, x2: 0.75, y2: 1.0 };
 
-  // ── State ────────────────────────────────────────────────────────────────
+  // ── Ellipse circumference (Ramanujan approximation) ───────────────────────
+  // rx=143, ry=183
+  const RX = 143, RY = 183;
+  const h  = Math.pow((RX - RY) / (RX + RY), 2);
+  const CIRCUMFERENCE = Math.PI * (RX + RY) * (1 + (3 * h) / (10 + Math.sqrt(4 - 3 * h)));
+
+  // ── State ─────────────────────────────────────────────────────────────────
   let session, currentStream;
   let isFrontCamera     = true;
   let currentFacingMode = "user";
   let alignStart        = null;
   let phase             = "aligning";
 
-  // ── Ring ─────────────────────────────────────────────────────────────────
-  const circumference = 2 * Math.PI * 96;
-  const ringFill      = document.getElementById("ringFill");
+  // ── Ring helpers ──────────────────────────────────────────────────────────
+  const ringFill = document.getElementById("ringFill");
+
+  // Rotate start point to top of ellipse
+  // SVG ellipse starts drawing from rightmost point — offset by -90deg via transform
+  ringFill.style.transformOrigin = "150px 190px";
+  ringFill.style.transform       = "rotate(-90deg)";
+  document.getElementById("ringTrack").style.transformOrigin = "150px 190px";
+  document.getElementById("ringTrack").style.transform       = "rotate(-90deg)";
 
   function setRing(fraction) {
-    const filled = fraction * circumference;
-    ringFill.style.strokeDasharray = `${filled} ${circumference}`;
+    const filled = fraction * CIRCUMFERENCE;
+    ringFill.style.strokeDasharray = `${filled} ${CIRCUMFERENCE + 10}`;
   }
 
-  // ── Boot ─────────────────────────────────────────────────────────────────
+  // ── Boot ──────────────────────────────────────────────────────────────────
   async function init() {
     setStatus("Loading models...");
     await Promise.all([
@@ -232,8 +251,7 @@
     if (phase !== "aligning") return;
 
     const video = document.getElementById("video");
-    let aligned = false;
-    let iou     = 0;
+    let aligned = false, iou = 0;
 
     if (video.readyState >= 2) {
       const det = await faceapi.detectSingleFace(video, DETECTOR_OPTIONS);
@@ -256,8 +274,8 @@
 
       if (elapsed >= HOLD_DURATION_MS) {
         phase = "capturing";
-        setStatus("Analysing...");
         setRing(1);
+        setStatus("Analysing...");
         await capture();
         return;
       }
@@ -265,7 +283,6 @@
       alignStart = null;
       setRing(0);
 
-      // Instructional messages based on what we see
       if (iou === 0) {
         setStatus("No face detected.\nLook directly at the camera.");
       } else if (iou < 0.20) {
@@ -309,7 +326,6 @@
       const tensor = new ort.Tensor("float32", floatData, [1, 3, 224, 224]);
       const result = await session.run({ input: tensor });
       logits.push(result.output.data[0]);
-
       await new Promise(r => setTimeout(r, 60));
     }
 
