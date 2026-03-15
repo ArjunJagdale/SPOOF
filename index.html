@@ -146,7 +146,7 @@
   <canvas id="canvas" width="224" height="224" style="display:none;"></canvas>
 
 <script>
-  const WEIGHTS_URL      = "https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights";
+  const WEIGHTS_URL      = "weights";
   const DETECTOR_OPTIONS = new faceapi.TinyFaceDetectorOptions({ scoreThreshold: 0.5 });
   const HOLD_DURATION_MS = 1500;
   const CAPTURE_FRAMES   = 15;
@@ -218,8 +218,8 @@
     if (video.readyState >= 2) {
       const det = await faceapi.detectSingleFace(video, DETECTOR_OPTIONS);
       if (det) {
-        const vw = video.videoWidth  || video.clientWidth;
-        const vh = video.videoHeight || video.clientHeight;
+        const vw = 224;
+        const vh = 224;
         iou     = computeIoU(det.box, vw, vh);
         aligned = iou >= OVAL_IOU_THRESH;
       }
