@@ -5,11 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Anti-Spoof Live</title>
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
-
-  <!-- MediaPipe FaceMesh — all-in-one, no extra model files needed -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
-
 <style>
   * {
     box-sizing: border-box;
@@ -93,71 +88,90 @@
 
 <script>
 // ─────────────────────────────────────────────────────────────────────────────
-//  DISTANCE ESTIMATION — MediaPipe FaceMesh
+//  DISTANCE ESTIMATION — pure pixel math, zero external libraries
 //
-//  We measure the pixel distance between left cheek landmark (234) and
-//  right cheek landmark (454) — the widest stable points on the face.
+//  We reuse the exact same 224×224 imageData already drawn for the spoof model.
+//  Steps:
+//    1. Scan every pixel for skin tone (works across light/dark skin via YCbCr)
+//    2. Find the leftmost & rightmost skin-pixel X columns → face width in px
+//    3. Apply pinhole camera formula:
+//         distance (cm) = (KNOWN_FACE_WIDTH_CM × FOCAL_PX) / face_px_width
 //
-//  Pinhole camera formula:
-//      distance (cm) = (KNOWN_FACE_WIDTH_CM × FOCAL_LENGTH_PX) / face_pixel_width
-//
-//  Focal length calibrated for a typical webcam (640px wide stream):
-//      A ~14 cm wide face at 60 cm ≈ 190 px wide  →  focal = 190×60/14 ≈ 814
-//  ⚙️  Tweak FOCAL_LENGTH_PX if readings feel off on your specific camera.
+//  Focal length is calibrated for the 224×224 canvas:
+//    At 60 cm a typical face fills ~60% of the 224px canvas → ~134 px wide
+//    focal = 134 × 60 / 14 ≈ 574
+//  ⚙️  Tweak FOCAL_PX below if readings feel off on your device.
 // ─────────────────────────────────────────────────────────────────────────────
-const KNOWN_FACE_WIDTH_CM = 14;   // average adult inter-cheek width in cm
-const FOCAL_LENGTH_PX     = 814;  // calibrated for a typical 640px-wide webcam
+const KNOWN_FACE_WIDTH_CM = 14;  // average adult inter-cheek width
+const FOCAL_PX            = 574; // calibrated for 224px canvas, ~60 cm ref dist
 
-// "Tight oval fit" target range in cm — adjust to match your oval size
+// Tight-oval target range in cm — adjust to match your oval
 const GOOD_MIN_CM = 25;
 const GOOD_MAX_CM = 38;
 
-// FaceMesh landmark indices for left & right cheek extremes
-const LEFT_CHEEK  = 234;
-const RIGHT_CHEEK = 454;
+// Minimum skin pixels needed to trust the reading (filters out stray noise)
+const MIN_SKIN_PIXELS = 300;
 
-let latestFaceWidthPx = null;   // updated by FaceMesh callback
+/**
+ * isSkin(r, g, b)
+ * Converts RGB → YCbCr and checks the classic skin-tone band.
+ * Works reasonably well across a wide range of skin colours.
+ */
+function isSkin(r, g, b) {
+  // RGB → YCbCr (BT.601)
+  const Y  =  0.299  * r + 0.587  * g + 0.114  * b;
+  const Cb = -0.1687 * r - 0.3313 * g + 0.5    * b + 128;
+  const Cr =  0.5    * r - 0.4187 * g - 0.0813 * b + 128;
+  return (
+    Y  >  80 &&
+    Cb >= 85  && Cb <= 135 &&
+    Cr >= 135 && Cr <= 180
+  );
+}
 
-// ── Initialise MediaPipe FaceMesh ─────────────────────────────────────────
-const faceMesh = new FaceMesh({
-  locateFile: file =>
-    `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
-});
+/**
+ * estimateFaceWidthPx(imageData)
+ * Scans the 224×224 RGBA pixel array.
+ * Returns the horizontal span (px) of the largest contiguous skin-column band,
+ * or null if not enough skin pixels were found.
+ */
+function estimateFaceWidthPx(imageData) {
+  let minX = 224, maxX = 0;
+  let skinCount = 0;
 
-faceMesh.setOptions({
-  maxNumFaces: 1,
-  refineLandmarks: false,   // keep it fast — we only need cheek landmarks
-  minDetectionConfidence: 0.5,
-  minTrackingConfidence: 0.5
-});
+  // Only scan the centre vertical strip (rows 30–190) to ignore neck/background
+  const ROW_START = 30, ROW_END = 190;
 
-faceMesh.onResults(results => {
-  if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-    const lm = results.multiFaceLandmarks[0];
-    const lc = lm[LEFT_CHEEK];
-    const rc = lm[RIGHT_CHEEK];
-
-    // Landmarks are normalised [0–1] — scale by actual video pixel width
-    const video = document.getElementById("video");
-    const vw    = video.videoWidth || 640;
-
-    const dx = (lc.x - rc.x) * vw;
-    const dy = (lc.y - rc.y) * vw;   // vw intentional (keeps aspect-correct)
-    latestFaceWidthPx = Math.sqrt(dx * dx + dy * dy);
-  } else {
-    latestFaceWidthPx = null;
+  for (let y = ROW_START; y < ROW_END; y++) {
+    for (let x = 0; x < 224; x++) {
+      const idx = (y * 224 + x) * 4;
+      const r = imageData[idx];
+      const g = imageData[idx + 1];
+      const b = imageData[idx + 2];
+      if (isSkin(r, g, b)) {
+        skinCount++;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+      }
+    }
   }
-});
 
-// ── Distance badge updater ────────────────────────────────────────────────
-function updateDistanceBadge() {
+  if (skinCount < MIN_SKIN_PIXELS || maxX <= minX) return null;
+  return maxX - minX;
+}
+
+/**
+ * updateDistanceBadge(faceWidthPx)
+ * Computes distance from pixel width and updates the UI badge.
+ */
+function updateDistanceBadge(faceWidthPx) {
   const badge = document.getElementById("distanceBadge");
-  if (!latestFaceWidthPx) {
+  if (!faceWidthPx) {
     badge.className = "";
     badge.textContent = "📏 Distance: — (no face detected)";
     return;
   }
-  const distanceCm = (KNOWN_FACE_WIDTH_CM * FOCAL_LENGTH_PX) / latestFaceWidthPx;
+  const distanceCm = (KNOWN_FACE_WIDTH_CM * FOCAL_PX) / faceWidthPx;
   const d = Math.round(distanceCm);
   if (d < GOOD_MIN_CM) {
     badge.className = "close";
@@ -169,15 +183,6 @@ function updateDistanceBadge() {
     badge.className = "good";
     badge.textContent = `📏 ${d} cm — ✓ Perfect distance`;
   }
-}
-
-// ── Feed video frames to FaceMesh (throttled to ~15 fps to stay light) ────
-let lastMeshTime = 0;
-async function sendToFaceMesh(video) {
-  const now = performance.now();
-  if (now - lastMeshTime < 66) return;   // ~15 fps cap
-  lastMeshTime = now;
-  await faceMesh.send({ image: video });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -230,6 +235,11 @@ async function runLoop() {
   ctx.restore();
 
   const imageData = ctx.getImageData(0, 0, 224, 224).data;
+
+  // ── Distance estimation — reuses imageData already read for spoof model ──
+  const faceWidthPx = estimateFaceWidthPx(imageData);
+  updateDistanceBadge(faceWidthPx);
+
   const floatData = new Float32Array(1 * 3 * 224 * 224);
   const mean = [0.485, 0.456, 0.406];
   const std  = [0.229, 0.224, 0.225];
@@ -250,10 +260,6 @@ async function runLoop() {
   document.getElementById("result").innerText =
     prob > 0.5 ? `REAL (${prob.toFixed(3)})`
                : `ATTACK (${prob.toFixed(3)})`;
-
-  // ── Distance: feed frame to FaceMesh + refresh badge ─────────────────────
-  sendToFaceMesh(video);   // async, non-blocking — won't slow down spoof check
-  updateDistanceBadge();
 
   requestAnimationFrame(runLoop);
 }
