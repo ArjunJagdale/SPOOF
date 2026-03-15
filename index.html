@@ -90,18 +90,15 @@
   const NO_FACE_BUFFER = 8;
   let faceVisible = false;
 
-  // face-api.js TinyFaceDetector options
-  // scoreThreshold: 0.5 is a safe gate — not too sensitive, not too strict
-  const DETECTOR_OPTIONS = new faceapi.TinyFaceDetectorOptions({ scoreThreshold: 0.5 });
+  // Weights are hosted on the GitHub repo via jsDelivr gh/ path — this works reliably
+  const WEIGHTS_URL = "https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights";
 
-  // CDN path where face-api.js weights are hosted (jsDelivr, works on GitHub Pages)
-  const WEIGHTS_URL = "https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/weights";
+  const DETECTOR_OPTIONS = new faceapi.TinyFaceDetectorOptions({ scoreThreshold: 0.5 });
 
   async function init() {
     const resultEl = document.getElementById("result");
     resultEl.innerText = "Loading models...";
 
-    // Load ONNX liveness model + face-api.js TinyFaceDetector weights in parallel
     await Promise.all([
       ort.InferenceSession.create("spoofnet.onnx").then(s => { session = s; }),
       faceapi.nets.tinyFaceDetector.loadFromUri(WEIGHTS_URL)
@@ -128,7 +125,6 @@
     isFrontCamera     = facingMode === "user";
     video.style.transform = isFrontCamera ? "scaleX(-1)" : "scaleX(1)";
 
-    // Reset buffer on camera switch
     noFaceFrames = 0;
     faceVisible  = false;
 
@@ -147,7 +143,6 @@
     const resultEl = document.getElementById("result");
 
     // ── Step 1: Face Detection Gate ───────────────────────────────────────
-    // face-api.js detects directly on the <video> element — no extra canvas needed
     let faceDetected = false;
 
     if (video.readyState >= 2) {
@@ -155,7 +150,6 @@
       faceDetected = !!detection;
     }
 
-    // Buffer: prevent flickering when face briefly leaves frame
     if (faceDetected) {
       noFaceFrames = 0;
       faceVisible  = true;
