@@ -7,38 +7,28 @@
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
   <style>
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
       text-align: center;
       font-family: Arial;
       overflow-x: hidden;
+      background: #fff;
     }
 
     h2 {
-      font-size: 30px;
+      font-size: 26px;
       margin: 16px 0 6px;
     }
 
-    .instructions {
-      font-size: 15px;
-      color: #444;
-      max-width: 360px;
-      margin: 8px auto 16px;
-      line-height: 1.4;
-      padding: 0 12px;
-    }
-
+    /* ── Video wrapper ── */
     .video-wrapper {
       position: relative;
-      width: min(400px, calc(100vw - 24px));
-      height: min(400px, calc(100vw - 24px));
-      margin: 0 auto;
+      width: min(340px, calc(100vw - 24px));
+      height: min(340px, calc(100vw - 24px));
+      margin: 12px auto 0;
       overflow: hidden;
+      border-radius: 50%;           /* circle crop for clean oval feel */
     }
 
     video {
@@ -48,238 +38,306 @@
       display: block;
     }
 
+    /* Dark vignette — oval cutout */
     .video-wrapper::after {
       content: "";
       position: absolute;
       inset: 0;
       pointer-events: none;
-      background:
-        radial-gradient(
-          ellipse 35% 55% at center,
-          transparent 0%,
-          transparent 90%,
-          rgba(0, 0, 0, 0.80) 91%
-        );
+      background: radial-gradient(
+        ellipse 38% 50% at center,
+        transparent 0%,
+        transparent 88%,
+        rgba(0,0,0,0.75) 89%
+      );
+      border-radius: 50%;
     }
+
+    /* ── Progress ring (SVG overlay) ── */
+    .ring-wrap {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+    }
+
+    #progressRing {
+      width: 100%;
+      height: 100%;
+      transform: rotate(-90deg);   /* start from top */
+    }
+
+    #ringTrack {
+      fill: none;
+      stroke: #ddd;
+      stroke-width: 4;
+    }
+
+    #ringFill {
+      fill: none;
+      stroke: #22c55e;             /* green */
+      stroke-width: 4;
+      stroke-linecap: round;
+      stroke-dasharray: 0 1000;   /* set by JS */
+      transition: stroke-dasharray 0.1s linear;
+    }
+
+    /* ── Status label under video ── */
+    #status {
+      margin: 14px auto 0;
+      font-size: 15px;
+      color: #444;
+      min-height: 22px;
+    }
+
+    /* ── Result box ── */
+    #resultBox {
+      display: none;
+      margin: 16px auto;
+      width: min(340px, calc(100vw - 24px));
+      padding: 16px;
+      border-radius: 10px;
+      font-size: 20px;
+      font-weight: bold;
+      letter-spacing: 0.5px;
+    }
+
+    #resultBox.real   { background: #dcfce7; color: #15803d; border: 2px solid #86efac; }
+    #resultBox.attack { background: #fee2e2; color: #b91c1c; border: 2px solid #fca5a5; }
+
+    /* ── Retry button ── */
+    #retryBtn {
+      display: none;
+      margin: 8px auto 20px;
+      padding: 10px 28px;
+      font-size: 15px;
+      border: none;
+      border-radius: 6px;
+      background: #3b82f6;
+      color: #fff;
+      cursor: pointer;
+    }
+
+    #retryBtn:hover { background: #2563eb; }
   </style>
 </head>
 <body>
 
-<h2>Live Anti-Spoof</h2>
+<h2>Face Liveness Check</h2>
 
-<p class="instructions">
-  • Ensure your face is clearly visible in good lighting (avoid harsh reflections).<br>
-  • Align and fit your face tightly within the oval.
-</p>
-
-<div class="video-wrapper">
+<div class="video-wrapper" id="videoWrapper">
   <video id="video" autoplay playsinline></video>
+  <div class="ring-wrap">
+    <svg id="progressRing" viewBox="0 0 200 200">
+      <circle id="ringTrack" cx="100" cy="100" r="96"/>
+      <circle id="ringFill"  cx="100" cy="100" r="96"/>
+    </svg>
+  </div>
 </div>
 
+<p id="status">Loading models...</p>
+<div id="resultBox"></div>
+<button id="retryBtn" onclick="retry()">Try Again</button>
+
+<!-- hidden canvas for frame capture -->
 <canvas id="canvas" width="224" height="224" style="display:none;"></canvas>
-<p id="result" style="margin-top:12px;">Loading models...</p>
 
 <script>
-  let session;
-  let currentFacingMode = "user";
+  // ── Config ───────────────────────────────────────────────────────────────
+  const WEIGHTS_URL       = "https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights";
+  const DETECTOR_OPTIONS  = new faceapi.TinyFaceDetectorOptions({ scoreThreshold: 0.5 });
+  const HOLD_DURATION_MS  = 1500;   // how long face must stay in oval
+  const CAPTURE_FRAMES    = 15;     // frames to grab on capture
+  const OVAL_IOU_THRESH   = 0.28;   // minimum IoU to count as "filling oval"
+  const MEAN              = [0.485, 0.456, 0.406];
+  const STD               = [0.229, 0.224, 0.225];
+
+  // Oval bounding rect as fractions (matches CSS ellipse 38% 50%)
+  const OVAL = { x1: 0.12, y1: 0.0, x2: 0.88, y2: 1.0 };
+
+  // ── State ────────────────────────────────────────────────────────────────
+  let session, currentStream;
   let isFrontCamera     = true;
-  let currentStream     = null;
+  let currentFacingMode = "user";
+  let alignStart        = null;   // timestamp when face first aligned
+  let phase             = "aligning"; // aligning | capturing | done
+  let loopRunning       = false;
 
-  // ── Flicker buffer — prevents state flipping on brief frame drops ────────
-  let noFaceFrames  = 0;
-  let badAlignFrames = 0;
-  const NO_FACE_BUFFER   = 8;
-  const BAD_ALIGN_BUFFER = 8;
-  let faceVisible  = false;
-  let faceAligned  = false;
+  // ── Ring circumference ───────────────────────────────────────────────────
+  const r           = 96;
+  const circumference = 2 * Math.PI * r;
+  const ringFill    = document.getElementById("ringFill");
 
-  // ── Prediction smoothing — rolling average over last N logits ────────────
-  const SMOOTH_WINDOW = 7;
-  const predBuffer    = [];
-
-  // ── face-api.js config ───────────────────────────────────────────────────
-  const WEIGHTS_URL      = "https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights";
-  const DETECTOR_OPTIONS = new faceapi.TinyFaceDetectorOptions({ scoreThreshold: 0.5 });
-
-  // ── Oval definition (matches CSS radial-gradient: ellipse 35% 55%) ───────
-  // Oval bounding rect as fraction of video display size:
-  //   X: center ± 35%  →  15% to 85%
-  //   Y: center ± 55%  →  -5% to 105% (clamped to 0–100%)
-  // We require the face box to substantially overlap this region.
-  const OVAL = { xMin: 0.15, xMax: 0.85, yMin: 0.0, yMax: 1.0 };
-
-  // Minimum IoU between face bbox and oval rect to consider face "filling" oval
-  const OVAL_IOU_THRESHOLD = 0.30;
+  function setRing(fraction) {
+    const filled = fraction * circumference;
+    ringFill.style.strokeDasharray = `${filled} ${circumference}`;
+  }
 
   // ── Boot ─────────────────────────────────────────────────────────────────
   async function init() {
-    const resultEl = document.getElementById("result");
-    resultEl.innerText = "Loading models...";
-
+    setStatus("Loading models...");
     await Promise.all([
       ort.InferenceSession.create("spoofnet.onnx").then(s => { session = s; }),
       faceapi.nets.tinyFaceDetector.loadFromUri(WEIGHTS_URL)
     ]);
-
-    resultEl.innerText = "Models loaded. Starting camera...";
-    startCamera(currentFacingMode);
+    setStatus("Starting camera...");
+    await startCamera("user");
   }
 
-  // ── Camera ───────────────────────────────────────────────────────────────
   async function startCamera(facingMode) {
-    const video = document.getElementById("video");
-
     if (currentStream) currentStream.getTracks().forEach(t => t.stop());
-
     const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode } });
+    const video  = document.getElementById("video");
     currentStream     = stream;
     video.srcObject   = stream;
     currentFacingMode = facingMode;
     isFrontCamera     = facingMode === "user";
     video.style.transform = isFrontCamera ? "scaleX(-1)" : "scaleX(1)";
-
-    // Reset all state on camera switch
-    noFaceFrames   = 0;
-    badAlignFrames = 0;
-    faceVisible    = false;
-    faceAligned    = false;
-    predBuffer.length = 0;
-
-    runLoop();
+    phase      = "aligning";
+    alignStart = null;
+    setRing(0);
+    loopRunning = false;
+    requestAnimationFrame(alignLoop);
   }
 
   // Double-tap to flip camera
   document.addEventListener("dblclick", () => {
+    if (phase === "done") return;
     startCamera(currentFacingMode === "user" ? "environment" : "user");
   });
 
-  // ── IoU between face bbox and oval rect ──────────────────────────────────
-  // Both rects expressed as fractions of video display dimensions.
-  // face-api.js returns box in px relative to displayed video element size.
-  function computeIoU(faceBox, videoW, videoH) {
-    // Normalise face box to 0–1 fractions
-    // For front camera, face-api sees the visually mirrored video (CSS scaleX(-1))
-    // so box.x is already in mirrored space — no extra flip needed for overlap check.
-    const fx1 = faceBox.x / videoW;
-    const fy1 = faceBox.y / videoH;
-    const fx2 = (faceBox.x + faceBox.width)  / videoW;
-    const fy2 = (faceBox.y + faceBox.height) / videoH;
-
-    const ox1 = OVAL.xMin, oy1 = OVAL.yMin;
-    const ox2 = OVAL.xMax, oy2 = OVAL.yMax;
-
-    const interX1 = Math.max(fx1, ox1);
-    const interY1 = Math.max(fy1, oy1);
-    const interX2 = Math.min(fx2, ox2);
-    const interY2 = Math.min(fy2, oy2);
-
-    const interW = Math.max(0, interX2 - interX1);
-    const interH = Math.max(0, interY2 - interY1);
-    const interArea = interW * interH;
-
-    const faceArea = (fx2 - fx1) * (fy2 - fy1);
-    const ovalArea = (ox2 - ox1) * (oy2 - oy1);
-    const unionArea = faceArea + ovalArea - interArea;
-
-    return unionArea > 0 ? interArea / unionArea : 0;
+  // ── IoU helper ───────────────────────────────────────────────────────────
+  function computeIoU(box, vw, vh) {
+    const fx1 = box.x / vw,          fy1 = box.y / vh;
+    const fx2 = (box.x + box.width) / vw, fy2 = (box.y + box.height) / vh;
+    const ix1 = Math.max(fx1, OVAL.x1), iy1 = Math.max(fy1, OVAL.y1);
+    const ix2 = Math.min(fx2, OVAL.x2), iy2 = Math.min(fy2, OVAL.y2);
+    const iw  = Math.max(0, ix2 - ix1), ih = Math.max(0, iy2 - iy1);
+    const inter = iw * ih;
+    const union = (fx2-fx1)*(fy2-fy1) + (OVAL.x2-OVAL.x1)*(OVAL.y2-OVAL.y1) - inter;
+    return union > 0 ? inter / union : 0;
   }
 
-  // ── Main loop ────────────────────────────────────────────────────────────
-  async function runLoop() {
-    const video    = document.getElementById("video");
-    const canvas   = document.getElementById("canvas");
-    const ctx      = canvas.getContext("2d");
-    const resultEl = document.getElementById("result");
+  // ── Alignment loop (lightweight — face-api only, no ONNX) ────────────────
+  async function alignLoop() {
+    if (phase !== "aligning") return;
 
-    // ── Layer 1: Is there a face at all? ─────────────────────────────────
-    let detection = null;
+    const video = document.getElementById("video");
+
+    let aligned = false;
     if (video.readyState >= 2) {
-      detection = await faceapi.detectSingleFace(video, DETECTOR_OPTIONS);
+      const det = await faceapi.detectSingleFace(video, DETECTOR_OPTIONS);
+      if (det) {
+        const vw  = video.videoWidth  || video.clientWidth;
+        const vh  = video.videoHeight || video.clientHeight;
+        const iou = computeIoU(det.box, vw, vh);
+        aligned   = iou >= OVAL_IOU_THRESH;
+      }
     }
 
-    if (detection) {
-      noFaceFrames = 0;
-      faceVisible  = true;
+    const now = performance.now();
+
+    if (aligned) {
+      if (!alignStart) alignStart = now;
+      const elapsed  = now - alignStart;
+      const fraction = Math.min(elapsed / HOLD_DURATION_MS, 1.0);
+      setRing(fraction);
+      setStatus("Hold still...");
+
+      if (elapsed >= HOLD_DURATION_MS) {
+        phase = "capturing";
+        setStatus("Analysing...");
+        setRing(1);
+        await capture();
+        return;
+      }
     } else {
-      noFaceFrames++;
-      if (noFaceFrames >= NO_FACE_BUFFER) faceVisible = false;
+      alignStart = null;
+      setRing(0);
+      setStatus("Fit your face tightly into the oval");
     }
 
-    if (!faceVisible) {
-      resultEl.innerText = "No Face Detected";
-      predBuffer.length  = 0;
-      requestAnimationFrame(runLoop);
-      return;
+    requestAnimationFrame(alignLoop);
+  }
+
+  // ── Capture: grab CAPTURE_FRAMES frames, run ONNX on each, average ───────
+  async function capture() {
+    const video  = document.getElementById("video");
+    const canvas = document.getElementById("canvas");
+    const ctx    = canvas.getContext("2d");
+    const logits = [];
+
+    for (let i = 0; i < CAPTURE_FRAMES; i++) {
+      // Draw frame
+      ctx.save();
+      if (isFrontCamera) {
+        ctx.scale(-1, 1);
+        ctx.drawImage(video, -224, 0, 224, 224);
+      } else {
+        ctx.drawImage(video, 0, 0, 224, 224);
+      }
+      ctx.restore();
+
+      // Preprocess — identical to training test_transform
+      const imageData = ctx.getImageData(0, 0, 224, 224).data;
+      const floatData = new Float32Array(3 * 224 * 224);
+      for (let p = 0; p < 224 * 224; p++) {
+        const r = imageData[p * 4]     / 255;
+        const g = imageData[p * 4 + 1] / 255;
+        const b = imageData[p * 4 + 2] / 255;
+        floatData[p]               = (r - MEAN[0]) / STD[0];
+        floatData[p + 224 * 224]   = (g - MEAN[1]) / STD[1];
+        floatData[p + 2 * 224*224] = (b - MEAN[2]) / STD[2];
+      }
+
+      const tensor  = new ort.Tensor("float32", floatData, [1, 3, 224, 224]);
+      const result  = await session.run({ input: tensor });
+      logits.push(result.output.data[0]);
+
+      // Small gap between frames so we get genuinely different frames
+      await new Promise(r => setTimeout(r, 60));
     }
 
-    // ── Layer 2: Does the face fill the oval? ─────────────────────────────
-    let fillingOval = false;
-    if (detection) {
-      const videoW = video.videoWidth  || video.clientWidth;
-      const videoH = video.videoHeight || video.clientHeight;
-      const iou    = computeIoU(detection.box, videoW, videoH);
-      fillingOval  = iou >= OVAL_IOU_THRESHOLD;
-    }
-
-    if (fillingOval) {
-      badAlignFrames = 0;
-      faceAligned    = true;
-    } else {
-      badAlignFrames++;
-      if (badAlignFrames >= BAD_ALIGN_BUFFER) faceAligned = false;
-    }
-
-    if (!faceAligned) {
-      resultEl.innerText = "Align face with oval";
-      predBuffer.length  = 0;
-      requestAnimationFrame(runLoop);
-      return;
-    }
-
-    // ── Layer 3: Liveness — full frame, untouched preprocessing ──────────
-    ctx.save();
-    if (isFrontCamera) {
-      ctx.scale(-1, 1);
-      ctx.drawImage(video, -224, 0, 224, 224);
-    } else {
-      ctx.drawImage(video, 0, 0, 224, 224);
-    }
-    ctx.restore();
-
-    const imageData = ctx.getImageData(0, 0, 224, 224).data;
-    const floatData = new Float32Array(1 * 3 * 224 * 224);
-    const mean = [0.485, 0.456, 0.406];
-    const std  = [0.229, 0.224, 0.225];
-
-    for (let i = 0; i < 224 * 224; i++) {
-      const r = imageData[i * 4]     / 255;
-      const g = imageData[i * 4 + 1] / 255;
-      const b = imageData[i * 4 + 2] / 255;
-      floatData[i]               = (r - mean[0]) / std[0];
-      floatData[i + 224 * 224]   = (g - mean[1]) / std[1];
-      floatData[i + 2 * 224*224] = (b - mean[2]) / std[2];
-    }
-
-    const tensor  = new ort.Tensor("float32", floatData, [1, 3, 224, 224]);
-    const results = await session.run({ input: tensor });
-    const logit   = results.output.data[0];
-
-    // ── Smooth: rolling average of raw logits ─────────────────────────────
-    predBuffer.push(logit);
-    if (predBuffer.length > SMOOTH_WINDOW) predBuffer.shift();
-
-    const avgLogit = predBuffer.reduce((a, b) => a + b, 0) / predBuffer.length;
+    // Average logits → single sigmoid
+    const avgLogit = logits.reduce((a, b) => a + b, 0) / logits.length;
     const prob     = 1 / (1 + Math.exp(-avgLogit));
 
-    resultEl.innerText =
-      prob > 0.5 ? `REAL (${prob.toFixed(3)})`
-                 : `ATTACK (${prob.toFixed(3)})`;
+    showResult(prob);
+  }
 
-    requestAnimationFrame(runLoop);
+  // ── Show result ───────────────────────────────────────────────────────────
+  function showResult(prob) {
+    phase = "done";
+    setStatus("");
+    setRing(0);
+
+    const box    = document.getElementById("resultBox");
+    const isReal = prob > 0.5;
+
+    box.className   = isReal ? "real" : "attack";
+    box.innerText   = isReal
+      ? `✓ Real Person  (${(prob * 100).toFixed(1)}%)`
+      : `✗ Spoof Detected  (${((1 - prob) * 100).toFixed(1)}% spoof)`;
+    box.style.display = "block";
+
+    document.getElementById("retryBtn").style.display = "inline-block";
+  }
+
+  // ── Retry ─────────────────────────────────────────────────────────────────
+  function retry() {
+    document.getElementById("resultBox").style.display  = "none";
+    document.getElementById("retryBtn").style.display   = "none";
+    phase      = "aligning";
+    alignStart = null;
+    setRing(0);
+    setStatus("Fit your face tightly into the oval");
+    requestAnimationFrame(alignLoop);
+  }
+
+  function setStatus(msg) {
+    document.getElementById("status").innerText = msg;
   }
 
   init();
 </script>
-
 </body>
 </html>
