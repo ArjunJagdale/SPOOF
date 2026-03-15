@@ -5,69 +5,62 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Anti-Spoof Live</title>
   <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
-  <script type="importmap">
-    {
-      "imports": {
-        "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/vision_bundle.js"
-      }
-    }
-  </script>
-  <style>
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
+<style>
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
 
-    body {
-      text-align: center;
-      font-family: Arial;
-      overflow-x: hidden;
-    }
+  body {
+    text-align: center;
+    font-family: Arial;
+    overflow-x: hidden;
+  }
 
-    h2 {
-      font-size: 30px;
-      margin: 16px 0 6px;
-    }
+  h2 {
+    font-size: 30px;
+    margin: 16px 0 6px;
+  }
 
-    .instructions {
-      font-size: 15px;
-      color: #444;
-      max-width: 360px;
-      margin: 8px auto 16px;
-      line-height: 1.4;
-      padding: 0 12px;
-    }
+  .instructions {
+    font-size: 15px;
+    color: #444;
+    max-width: 360px;
+    margin: 8px auto 16px;
+    line-height: 1.4;
+    padding: 0 12px;
+  }
 
-    .video-wrapper {
-      position: relative;
-      width: min(400px, calc(100vw - 24px));
-      height: min(400px, calc(100vw - 24px));
-      margin: 0 auto;
-      overflow: hidden;
-    }
+  .video-wrapper {
+    position: relative;
+    width: min(400px, calc(100vw - 24px));
+    height: min(400px, calc(100vw - 24px));
+    margin: 0 auto;
+    overflow: hidden;
+  }
 
-    video {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      display: block;
-    }
+  video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
 
-    .video-wrapper::after {
-      content: "";
-      position: absolute;
-      inset: 0;
-      pointer-events: none;
-      background:
-        radial-gradient(
-          ellipse 35% 55% at center,
-          transparent 0%,
-          transparent 90%,
-          rgba(0, 0, 0, 0.80) 91%
-        );
-    }
-  </style>
+  .video-wrapper::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(
+        ellipse 35% 55% at center,
+        transparent 0%,
+        transparent 90%,
+        rgba(0, 0, 0, 0.80) 91%
+      );
+  }
+</style>
 </head>
 <body>
 
@@ -83,49 +76,17 @@
 </div>
 
 <canvas id="canvas" width="224" height="224" style="display:none;"></canvas>
-<p id="result" style="margin-top:12px;">Loading models...</p>
+<p id="result" style="margin-top:12px;">Loading model...</p>
 
-<script type="module">
-import { FaceDetector, FilesetResolver } from "@mediapipe/tasks-vision";
-
+<script>
 let session;
-let faceDetector;
-let currentFacingMode = "user";
+let currentFacingMode = "user"; // default front
 let isFrontCamera = true;
 let currentStream = null;
 
-// Small buffer to avoid flickering: track consecutive no-face frames
-let noFaceFrames = 0;
-const NO_FACE_BUFFER = 8; // frames before switching to "No Face Detected"
-let faceVisible = false;
-
-const FACE_CONFIDENCE_THRESHOLD = 0.7;
-
 async function init() {
-  const resultEl = document.getElementById("result");
-  resultEl.innerText = "Loading models...";
-
-  // Load both in parallel
-  const [filesetResolver] = await Promise.all([
-    FilesetResolver.forVisionTasks(
-      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
-    ),
-    (async () => {
-      session = await ort.InferenceSession.create("spoofnet.onnx");
-    })()
-  ]);
-
-  faceDetector = await FaceDetector.createFromOptions(filesetResolver, {
-    baseOptions: {
-      modelAssetPath:
-        "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
-      delegate: "GPU"
-    },
-    runningMode: "VIDEO",
-    minDetectionConfidence: FACE_CONFIDENCE_THRESHOLD
-  });
-
-  resultEl.innerText = "Models loaded. Starting camera...";
+  session = await ort.InferenceSession.create("spoofnet.onnx");
+  document.getElementById("result").innerText = "Model loaded. Starting camera...";
   startCamera(currentFacingMode);
 }
 
@@ -146,16 +107,13 @@ async function startCamera(facingMode) {
   currentFacingMode = facingMode;
   isFrontCamera = facingMode === "user";
 
+  // Flip only front camera visually
   video.style.transform = isFrontCamera ? "scaleX(-1)" : "scaleX(1)";
-
-  // Reset buffer on camera switch
-  noFaceFrames = 0;
-  faceVisible = false;
 
   runLoop();
 }
 
-// Double tap to switch camera
+// Optional: double tap to switch camera (no UI change)
 document.addEventListener("dblclick", () => {
   const newMode = currentFacingMode === "user" ? "environment" : "user";
   startCamera(newMode);
@@ -165,46 +123,15 @@ async function runLoop() {
   const video = document.getElementById("video");
   const canvas = document.getElementById("canvas");
   const ctx = canvas.getContext("2d");
-  const resultEl = document.getElementById("result");
 
-  // ── Step 1: Face Detection Gate ─────────────────────────────────────────
-  let faceDetected = false;
-
-  if (video.readyState >= 2) {
-    try {
-      const detections = faceDetector.detectForVideo(video, performance.now());
-      faceDetected = detections.detections.length > 0;
-    } catch (e) {
-      // Silently skip on edge cases (e.g. video not ready)
-      faceDetected = false;
-    }
-  }
-
-  // Buffer logic: avoid flickering
-  if (faceDetected) {
-    noFaceFrames = 0;
-    faceVisible = true;
-  } else {
-    noFaceFrames++;
-    if (noFaceFrames >= NO_FACE_BUFFER) {
-      faceVisible = false;
-    }
-  }
-
-  // ── Step 2: If no face, skip classifier ─────────────────────────────────
-  if (!faceVisible) {
-    resultEl.innerText = "No Face Detected";
-    requestAnimationFrame(runLoop);
-    return;
-  }
-
-  // ── Step 3: Existing liveness logic (untouched) ─────────────────────────
   ctx.save();
 
   if (isFrontCamera) {
+    // Flip canvas only for front camera
     ctx.scale(-1, 1);
     ctx.drawImage(video, -224, 0, 224, 224);
   } else {
+    // Rear camera not flipped
     ctx.drawImage(video, 0, 0, 224, 224);
   }
 
@@ -232,7 +159,7 @@ async function runLoop() {
   const logit = results.output.data[0];
   const prob = 1 / (1 + Math.exp(-logit));
 
-  resultEl.innerText =
+  document.getElementById("result").innerText =
     prob > 0.5 ? `REAL (${prob.toFixed(3)})`
                : `ATTACK (${prob.toFixed(3)})`;
 
