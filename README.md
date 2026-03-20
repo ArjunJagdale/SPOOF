@@ -11,6 +11,12 @@ The model detects whether a face image is **real** or a **spoof attack** (e.g., 
 * **AUC** : 0.9792 | at epoch 13/20
 ✓ Best model saved (acc=92.86%)
 
+## Website Demo - 
+> below photo was shown from redmi 9 prime and it is classified as spoof, as expected
+<img width="1260" height="558" alt="Screenshot 2026-03-20 212632" src="https://github.com/user-attachments/assets/420dd03a-5d4e-4541-83cf-4f2b7e2b7cc5" />
+<img width="1260" height="589" alt="image" src="https://github.com/user-attachments/assets/1ef5bff2-1962-44cd-a947-dbfd171b5f7a" />
+
+
 ---
 
 ## Overview
