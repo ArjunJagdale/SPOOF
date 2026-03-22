@@ -3,6 +3,9 @@
 SpoofNet is a CNN-based face anti-spoofing system built using PyTorch.
 The model detects whether a face image is **real** or a **spoof attack** (e.g., replay/photo attack) using a hybrid deep learning architecture that combines semantic understanding with explicit texture modeling.
 
+### live demo - 
+[click here](https://arjunjagdale.github.io/SPOOF/) for the live demo, Make sure the face is visible to the webcam with a good lightning!
+
 ---
 
 # Results
